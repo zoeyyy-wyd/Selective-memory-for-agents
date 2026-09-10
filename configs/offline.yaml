@@ -1,0 +1,19 @@
+# No model anywhere: heuristic extractor, hash embeddings, lexical NLI, extractive answering,
+# exact-match judge. For tests, dry runs and the demo.
+name: offline
+budget:
+  read_tokens: 2000
+write:
+  policy: sieve
+evict:
+  policy: swap
+consolidation:
+  policy: redundancy
+read:
+  retrieval: two_hop
+  packing: budgeted_greedy
+extract:
+  backend: heuristic
+models:
+  embedder: hash
+  nli_model: lexical

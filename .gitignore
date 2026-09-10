@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+data/
+!data/.gitkeep
+evals/results/*
+!evals/results/.gitkeep
+.cache/
+*.sqlite
+*.db
+.env

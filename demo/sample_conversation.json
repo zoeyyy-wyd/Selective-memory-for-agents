@@ -1,0 +1,46 @@
+[
+  {"session_id": "s01", "date": "2023/01/12 (Thu) 09:10", "turns": [
+    {"role": "user", "content": "Hi! My name is Dana. I work at Northwind Labs as a data engineer and I am allergic to peanuts, so keep that in mind if you suggest recipes."},
+    {"role": "assistant", "content": "Nice to meet you, Dana. I will avoid peanuts in any recipe suggestions."}
+  ]},
+  {"session_id": "s03", "date": "2023/02/04 (Sat) 18:30", "turns": [
+    {"role": "user", "content": "I just moved to Boston, renting near Kendall. My favorite cuisine is Thai and I love garlic in almost everything I cook."},
+    {"role": "assistant", "content": "Congratulations on the move to Boston. Kendall Square has several good Thai places within walking distance."}
+  ]},
+  {"session_id": "s05", "date": "2023/02/14 (Tue) 20:05", "turns": [
+    {"role": "user", "content": "Can you give me a simple pasta recipe for tonight? I have tomatoes, basil and parmesan at home."},
+    {"role": "assistant", "content": "Start by boiling salted water, then cook the pasta while you crush the tomatoes with garlic and olive oil."}
+  ]},
+  {"session_id": "s07", "date": "2023/02/20 (Mon) 21:40", "turns": [
+    {"role": "user", "content": "I made the tomato pasta again and added extra garlic, it was great. Could you suggest a dessert without nuts?"},
+    {"role": "assistant", "content": "A lemon posset needs only cream, sugar and lemon and contains no nuts."}
+  ]},
+  {"session_id": "s09", "date": "2023/03/06 (Mon) 08:15", "turns": [
+    {"role": "user", "content": "I am debugging a segfault in my C++ project at work today and it is driving me crazy."},
+    {"role": "assistant", "content": "Run the binary under valgrind or AddressSanitizer to find the invalid memory access first."}
+  ]},
+  {"session_id": "s11", "date": "2023/03/18 (Sat) 11:00", "turns": [
+    {"role": "user", "content": "I cooked the garlic tomato pasta for friends and everyone asked for the recipe. I also tried the lemon posset."},
+    {"role": "assistant", "content": "Glad it went well. You could try adding roasted cherry tomatoes next time."}
+  ]},
+  {"session_id": "s12", "date": "2023/03/21 (Tue) 19:25", "turns": [
+    {"role": "user", "content": "My cat Milo is turning three next week and I want to bake him a small treat."},
+    {"role": "assistant", "content": "A tuna and oat biscuit is safe for cats and easy to bake."}
+  ]},
+  {"session_id": "s15", "date": "2023/04/10 (Mon) 07:50", "turns": [
+    {"role": "user", "content": "I have been running along the Charles River every morning this month. I signed up for a 10k in June."},
+    {"role": "assistant", "content": "A 10k in June gives you about eight weeks; a gradual plan with one long run a week works well."}
+  ]},
+  {"session_id": "s18", "date": "2023/05/02 (Tue) 22:10", "turns": [
+    {"role": "user", "content": "Can you help me draft an email to my landlord about ending the Boston lease early? I might be relocating for work."},
+    {"role": "assistant", "content": "Here is a draft: Dear landlord, I am writing to discuss ending my lease early due to a work relocation."}
+  ]},
+  {"session_id": "s21", "date": "2023/05/19 (Fri) 17:45", "turns": [
+    {"role": "user", "content": "I moved to Seattle this week because of a company transfer. I now work at Northwind Labs Seattle office."},
+    {"role": "assistant", "content": "Welcome to Seattle. Let me know if you want neighbourhood suggestions near the office."}
+  ]},
+  {"session_id": "s24", "date": "2023/06/03 (Sat) 10:30", "turns": [
+    {"role": "user", "content": "I ran the 10k this morning in 52 minutes. Milo handled the move fine."},
+    {"role": "assistant", "content": "Congratulations on the 10k, 52 minutes is a solid time."}
+  ]}
+]

@@ -1,0 +1,37 @@
+# One group per design decision (plan section 10). `smem-eval --ablation-group evict` runs every row
+# of a group with the same base config; each row is a set of dotted overrides.
+base: configs/default.yaml
+groups:
+  write:
+    all:                {write.policy: all}
+    novelty_threshold:  {write.policy: novelty_threshold}
+    sieve:              {write.policy: sieve}
+  evict:
+    fifo:               {evict.policy: fifo}
+    lru:                {evict.policy: lru}
+    random:             {evict.policy: random}
+    utility_heuristic:  {evict.policy: utility_heuristic}
+    swap:               {evict.policy: swap}
+    swap_no_hawkes:     {evict.policy: swap_no_hawkes}
+  validity_chain:
+    chain:              {write.validity_chain: true}
+    no_validity_chain:  {write.validity_chain: false}
+  consolidation:
+    redundancy:         {consolidation.policy: redundancy}
+    fixed_interval:     {consolidation.policy: fixed_interval}
+    no_consolidation:   {consolidation.policy: no_consolidation}
+    no_nli_check:       {consolidation.policy: no_nli_check}
+  retrieval:
+    single_hop:         {read.retrieval: single_hop}
+    two_hop:            {read.retrieval: two_hop}
+  packing:
+    topk:               {read.packing: topk}
+    mmr:                {read.packing: mmr}
+    budgeted_greedy:    {read.packing: budgeted_greedy}
+  constrained_decoding:
+    constrained:        {extract.constrained_decoding: true}
+    no_constrained_decoding: {extract.constrained_decoding: false}
+# Figure 1: store budget sweep (fractions of history tokens); Figure 2: read budget sweep.
+sweeps:
+  store_budget: [1.0, 0.5, 0.25, 0.125]
+  read_budget: [1000, 2000, 4000, 8000]

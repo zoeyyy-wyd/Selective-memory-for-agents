@@ -1,0 +1,14 @@
+# conda env create -f environment.yml && conda activate smem && pip install -e ".[dev]"
+name: smem
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy>=1.26
+  - faiss-cpu>=1.8
+  - pytorch>=2.2          # CPU build; needed by sentence-transformers (bge-m3) and the NLI model
+  - sentence-transformers>=3.0
+  - transformers>=4.40
+  - pip:
+      - -e .[dev]

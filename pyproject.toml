@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smem"
+version = "0.1.0"
+description = "A selective memory system for long-conversation agents: budgeted submodular write / forget / read."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "pydantic>=2.6",
+    "numpy>=1.26",
+    "rank-bm25>=0.2.2",
+    "openai>=1.30",
+    "dateparser>=1.2",
+    "tiktoken>=0.7",
+    "pyyaml>=6.0",
+    "datasets>=2.19",
+    "huggingface-hub>=0.23",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+# Dense retrieval with bge-m3 (pulls in torch). Not needed for the offline / test path.
+embed = ["sentence-transformers>=3.0"]
+# NLI entailment check for consolidation (DeBERTa-class cross-encoder).
+nli = ["transformers>=4.40", "torch>=2.2"]
+# Extraction server. Linux + CUDA only; install on the GPU box, not on the laptop.
+gpu = ["vllm>=0.6", "xgrammar>=0.1"]
+# Mem0 open-source baseline.
+baselines = ["mem0ai>=0.1.60"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.5"]
+
+[project.scripts]
+smem-eval = "evals.run:main"
+smem-demo = "demo.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src", "."]
+include = ["smem*", "evals*", "baselines*", "demo*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# LongMemEval timestamps are naive local times and the whole system keeps datetimes naive on purpose.
+ignore = ["DTZ"]
