@@ -81,6 +81,16 @@ marginal gain is one matrix-vector product and all per-member losses come out of
 At the storage scale *H* is every candidate seen so far and *S* the store; at the read scale *H* is the
 retrieval candidate set and *S* the packed context.
 
+**Keys.** A fact's key is `(entity, attribute)`. The long tail lives in the entity (a snake_case noun
+phrase naming the thing described: `charity_5k_run`, `korean_restaurants_tried`, `rachel`); the attribute
+comes from a closed list of ~25 names (`location`, `count`, `personal_best`, `setting`, ...) that
+constrained decoding pins, with `other` + `custom_attribute` as the escape hatch. This is what makes two
+mentions of the same thing land on the same key so a validity chain can form. 42 of the 72 answerable
+knowledge-update questions are running counts, so the prompt asks for the current total, never the
+increment. Residual drift (`location` vs `current_location`, `rachel` vs `rachel_colleague`) is
+reported per run under `key_drift` in the stats and never auto-merged: a wrong merge closes a valid
+fact, a missed merge only leaves two independent facts.
+
 **Write (`write.py`).** Facts are first deduplicated (same value → union sources) or turned into a
 knowledge update (same entity/attribute, new value → validity chain; the `no_validity_chain` ablation
 overwrites). Truly new candidates then go through streaming selection: `sieve` keeps a geometric grid
@@ -143,7 +153,7 @@ are all in `records.jsonl`; `summary.json` has every aggregate with a bootstrap 
    and point `models.extract_base_url` at it (SSH tunnel is fine; extraction is cached per session).
 2. `export OPENAI_API_KEY=...`; the answering and judge models are set in `configs/default.yaml`.
 3. Build order as in plan §13: oracle / full-context / naive-RAG baselines on dev, then the system with
-   *B* unbounded, then the `evict` sweep at *B* ∈ {1, 0.5, 0.25, 0.125} (Figure 1), the `packing` sweep at
+   *B* unbounded, then the `evict` sweep at *B* ∈ {0.125, 0.06, 0.03, 0.015} (Figure 1), the `packing` sweep at
    *R* ∈ {1k, 2k, 4k, 8k} (Figure 2), and `validity_chain` by question type (Figure 3). Test split only at
    the end, with `--judge llm` and `models.judge_model: gpt-4o`.
 4. Fit the Hawkes parameters on dev with `HawkesIntensity.fit()` over the dev histories and put the
@@ -170,5 +180,7 @@ evidence metrics but not meaningful accuracy (hash embeddings, extractive answer
   only been exercised through their offline stand-ins and scripted-LLM tests.
 - The judge prompts are a port of upstream `evaluate_qa.py`; diff against the LongMemEval repository
   before the final test run.
+- Key drift has only been exercised with the heuristic extractor, whose keys come from a fixed table.
+  The first thing to inspect after the real dev extraction is `key_drift` in `summary.json` / `records.jsonl`.
 - `HashEmbedder` similarity is lexical, so offline relevance/abstention behaviour is only indicative;
   `read.tau_abs` and the Hawkes parameters are meant to be tuned on dev with the real models.

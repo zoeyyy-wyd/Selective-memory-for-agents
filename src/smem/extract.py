@@ -19,7 +19,52 @@ from smem.schemas import Episode, ExtractionResult, Fact, Session, Turn, make_id
 from smem.temporal import normalize_relative_date
 from smem.tokens import count_tokens
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
+
+# Keys: the long tail lives in the ENTITY (a noun phrase naming the thing described), the ATTRIBUTE
+# comes from this closed list so that constrained decoding pins it. Two facts about the same thing
+# therefore land on the same (entity, attribute) key, which is what the validity chain needs.
+CANONICAL_ATTRIBUTES: dict[str, str] = {
+    "name": "what someone or something is called",
+    "location": "where someone lives or where a thing is",
+    "employer": "company or organisation someone works for",
+    "occupation": "job title or role",
+    "status": "current state, e.g. finished, pending, broken, single",
+    "count": "how many so far; write the CURRENT TOTAL, never the increment",
+    "frequency": "how often, e.g. twice a week",
+    "duration": "how long, elapsed or planned",
+    "schedule": "when: day of week or time",
+    "personal_best": "best result so far",
+    "amount": "a quantity of money or material",
+    "price": "a cost",
+    "model": "brand, model or type of an item",
+    "method": "how something is done",
+    "setting": "a configured value or ratio",
+    "preference": "a liking or a preferred way of doing things",
+    "favorite": "the favourite instance of a category",
+    "dislike": "something disliked",
+    "allergy": "an allergen",
+    "health": "a health condition or symptom",
+    "goal": "a target or plan",
+    "relationship": "how two people are related",
+    "date": "a date attached to the entity: birthday, anniversary, deadline",
+    "contact": "phone, email or address",
+    "other": "none of the above; put a snake_case name in custom_attribute",
+}
+
+_ENTITY_DETERMINER = re.compile(r"^(?:my|the|a|an|our|his|her|their)_")
+
+
+def canonical_entity(name: str) -> str:
+    """Deterministic entity normalisation: snake_case, no leading determiner. Never merges two
+    different names; that decision is left to a human after reading the key-drift diagnostic."""
+    s = re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
+    s = _ENTITY_DETERMINER.sub("", s)
+    return re.sub(r"_+", "_", s).strip("_") or "user"
+
+
+def canonical_attribute(name: str) -> str:
+    return re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]+", "_", name.strip().lower())).strip("_")
 
 EXTRACTION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -45,7 +90,8 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "turn_idx": {"type": "integer"},
                     "entity": {"type": "string"},
-                    "attribute": {"type": "string"},
+                    "attribute": {"type": "string", "enum": list(CANONICAL_ATTRIBUTES)},
+                    "custom_attribute": {"type": ["string", "null"]},
                     "value": {"type": "string"},
                     "kind": {"type": "string", "enum": ["stated", "preference", "inferred"]},
                     "speaker": {"type": "string", "enum": ["user", "assistant"]},
@@ -66,11 +112,25 @@ things the user did, plans, life events, problems, purchases, people and places.
 skip the assistant's explanations unless the user acted on them. Include the turn index and named entities.
 Convert relative dates ("last Wednesday", "next month") to absolute dates using the session date.
 
-"facts": stable attributes as (entity, attribute, value) triples, e.g. ("user", "city", "Seattle"),
-("user", "allergy", "peanuts"), ("user", "favorite_cuisine", "Thai"). Use snake_case attribute names,
-reuse attribute names consistently, entity "user" for the user. kind = "stated" for explicit statements,
-"preference" for likes/dislikes, "inferred" if you had to infer it. speaker = who asserted it.
-valid_from = ISO date if the fact explicitly starts at a date, else null."""
+"facts": (entity, attribute, value) triples for anything a later question could ask about.
+
+Entity rules. The entity is THE THING THE ATTRIBUTE DESCRIBES. Use "user" only for the user's own personal
+attributes (name, location, employer, occupation, allergy, health, preferences, relationships). Anything the
+user owns, does, tracks or collects, and any other person, is its own entity: a short snake_case noun phrase,
+e.g. "charity_5k_run", "korean_restaurants_tried", "ethereal_dreams_painting", "rachel", "french_press".
+Reuse exactly the same entity name whenever the same thing comes up again.
+
+Attribute rules. attribute MUST be one of: {attributes}. If nothing fits, use "other" and put a snake_case
+name in custom_attribute. For counts and totals write the current total, never the increment.
+
+Examples:
+  ("user", "location", "Seattle")            ("user", "allergy", "peanuts")
+  ("charity_5k_run", "personal_best", "24:10")   ("korean_restaurants_tried", "count", "5")
+  ("ethereal_dreams_painting", "location", "living room")   ("rachel", "employer", "Acme Corp")
+  ("french_press", "setting", "1 tbsp coffee per 150 ml water")
+
+kind = "stated" for explicit statements, "preference" for likes/dislikes, "inferred" if you had to infer it.
+speaker = who asserted it. valid_from = ISO date if the fact explicitly starts at a date, else null."""
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'(])")
 _FIRST_PERSON = re.compile(r"\b(i|i'm|i've|i'd|i'll|my|me|we|our|mine)\b", re.IGNORECASE)
@@ -82,8 +142,8 @@ _STOP_ENTITIES = {"I", "The", "A", "An", "My", "Me", "We", "It", "This", "That",
 # (pattern, attribute, kind). Group 1 is the value. Kept deliberately small: the heuristic extractor
 # exists to keep the pipeline runnable without a model, not to compete with it.
 _FACT_PATTERNS: list[tuple[re.Pattern, str, str]] = [
-    (re.compile(r"\bI(?: just| recently)? moved to ([A-Z][\w .'-]+?)(?=[,.!?;]| this| last| for| with| and| because|$)"), "city", "stated"),
-    (re.compile(r"\bI(?:'m| am)? (?:currently )?liv(?:e|ing) in ([A-Z][\w .'-]+?)(?=[,.!?;]| now| with| and| for|$)"), "city", "stated"),
+    (re.compile(r"\bI(?: just| recently)? moved to ([A-Z][\w .'-]+?)(?=[,.!?;]| this| last| for| with| and| because|$)"), "location", "stated"),
+    (re.compile(r"\bI(?:'m| am)? (?:currently )?liv(?:e|ing) in ([A-Z][\w .'-]+?)(?=[,.!?;]| now| with| and| for|$)"), "location", "stated"),
     (re.compile(r"\bI (?:work|am working|started working) (?:at|for) ([A-Z][\w .&'-]+?)(?=[,.!?;]| as| in| now| and|$)"), "employer", "stated"),
     (re.compile(r"\bI(?:'m| am) (?:a|an) ([a-z][\w -]{2,30}?)(?= at| in| for| by| and|[,.!?;]|$)"), "occupation", "inferred"),
     (re.compile(r"\bI(?:'m| am) allergic to ([\w ,'-]+?)(?=[.!?;]| and| so| which|$)"), "allergy", "stated"),
@@ -212,7 +272,8 @@ class LLMExtractor:
         raw = self.cache.get(key) if self.cache else None
         if raw is None:
             raw = self.llm.complete(
-                SYSTEM_PROMPT.format(date=session.ts.strftime("%Y-%m-%d")),
+                SYSTEM_PROMPT.format(date=session.ts.strftime("%Y-%m-%d"),
+                                     attributes=", ".join(f'"{k}" ({v})' for k, v in CANONICAL_ATTRIBUTES.items())),
                 _render_session(session),
                 json_schema=EXTRACTION_SCHEMA if self.constrained_decoding else None,
                 max_tokens=2048,
@@ -263,8 +324,16 @@ class LLMExtractor:
         for item in obj["facts"]:
             try:
                 idx = int(item["turn_idx"])
-                entity = str(item["entity"]).strip() or "user"
-                attribute = re.sub(r"[^a-z0-9_]+", "_", str(item["attribute"]).strip().lower()).strip("_")
+                entity = canonical_entity(str(item["entity"]))
+                raw_attr = canonical_attribute(str(item["attribute"]))
+                if raw_attr == "other":
+                    attribute = canonical_attribute(str(item.get("custom_attribute") or ""))
+                elif raw_attr in CANONICAL_ATTRIBUTES:
+                    attribute = raw_attr
+                else:
+                    # only reachable without constrained decoding: keep the fact, count the violation
+                    attribute = raw_attr
+                    ok = False
                 value = str(item["value"]).strip()
                 kind = item.get("kind", "stated")
                 if kind not in ("stated", "preference", "inferred") or not attribute or not value:

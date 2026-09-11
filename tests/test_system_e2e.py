@@ -14,7 +14,7 @@ def build(cfg_overrides=None, sessions=None):
 
 
 def city_facts(res):
-    return {e.value for e in res.read.packed if isinstance(e, Fact) and e.attribute == "city"}
+    return {e.value for e in res.read.packed if isinstance(e, Fact) and e.attribute == "location"}
 
 
 def test_worked_example_now_march_and_whole_chain(worked_example):
@@ -48,6 +48,8 @@ def test_evidence_bookkeeping(worked_example):
     assert evidence and evidence <= mem.writer.written_ids
     assert mem.candidates_from_sessions({"s3"}, {"s3": {0}})  # turn filter keeps turn-0 episodes and facts
     assert mem.surviving_ids() <= set(mem.store.ids())
+    drift = mem.stats()["key_drift"]
+    assert drift["n_keys"] >= 2 and drift["n_suspicious_attribute_pairs"] == 0
 
 
 def test_budget_pressure_keeps_hot_chain(worked_example):

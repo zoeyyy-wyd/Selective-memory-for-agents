@@ -25,8 +25,8 @@ from smem.extract import Extractor, HeuristicExtractor, LLMExtractor
 from smem.hawkes import HawkesIntensity
 from smem.llm import LLM, OpenAICompatLLM
 from smem.read import Reader, ReadResult
-from smem.schemas import Session
-from smem.store import MemoryStore
+from smem.schemas import Fact, Session
+from smem.store import MemoryStore, key_drift
 from smem.write import WritePolicy
 
 
@@ -155,6 +155,17 @@ class SelectiveMemory:
             "consolidation": self.consolidator.stats.as_dict(),
             "extractions": self.extractions,
             "schema_errors": self.schema_errors,
+            "key_drift": self.key_drift_summary(),
+        }
+
+    def key_drift_summary(self, examples: int = 10) -> dict:
+        drift = key_drift(e for e in self.writer.candidates.values() if isinstance(e, Fact))
+        return {
+            "n_entities": drift["n_entities"],
+            "n_keys": drift["n_keys"],
+            "n_suspicious_attribute_pairs": len(drift["suspicious_attribute_pairs"]),
+            "n_suspicious_entity_pairs": len(drift["suspicious_entity_pairs"]),
+            "examples": (drift["suspicious_attribute_pairs"] + drift["suspicious_entity_pairs"])[:examples],
         }
 
     def close(self) -> None:

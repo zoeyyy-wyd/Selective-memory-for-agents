@@ -324,3 +324,33 @@ class MemoryStore:
     def close(self) -> None:
         self.db.commit()
         self.db.close()
+
+
+def key_drift(facts: Iterable[Fact], threshold: float = 0.8) -> dict:
+    """Diagnostic, not a fix: near-identical attribute names under one entity, and near-identical
+    entity names. Such pairs are where a validity chain silently failed to form. They are reported
+    and never auto-merged, because a wrong merge closes a valid fact (hard failure) while a missed
+    merge only leaves two independent facts (soft failure)."""
+    import difflib
+
+    attrs_by_entity: dict[str, set[str]] = defaultdict(set)
+    for f in facts:
+        attrs_by_entity[f.entity].add(f.attribute)
+
+    def is_close(a: str, b: str) -> bool:
+        # the common drift is a modifier glued on one end: current_location, rachel_colleague, num_x
+        if a.startswith(b + "_") or b.startswith(a + "_") or a.endswith("_" + b) or b.endswith("_" + a):
+            return True
+        return difflib.SequenceMatcher(None, a, b).ratio() >= threshold
+
+    def close_pairs(names: list[str]) -> list[tuple[str, str]]:
+        return [(a, b) for i, a in enumerate(names) for b in names[i + 1:] if a != b and is_close(a, b)]
+
+    attr_pairs = [(ent, a, b) for ent, attrs in sorted(attrs_by_entity.items()) for a, b in close_pairs(sorted(attrs))]
+    ent_pairs = close_pairs(sorted(attrs_by_entity))
+    return {
+        "n_entities": len(attrs_by_entity),
+        "n_keys": sum(len(v) for v in attrs_by_entity.values()),
+        "suspicious_attribute_pairs": attr_pairs,
+        "suspicious_entity_pairs": ent_pairs,
+    }
