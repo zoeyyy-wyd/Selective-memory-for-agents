@@ -56,12 +56,20 @@ class OpenAICompatLLM:
         api_key: str | None = None,
         cache_dir: str | Path | None = None,
         constrained_decoding: bool = True,
+        schema_mode: str = "response_format",
+        extra_body: dict[str, Any] | None = None,
     ):
         from openai import OpenAI  # local import keeps the offline path free of network clients
 
         self.model = model
         self.base_url = base_url
         self.constrained_decoding = constrained_decoding
+        # "response_format" is understood by OpenAI, vLLM (routed to its structured-output backend)
+        # and llama.cpp; "guided_json" is the older vLLM-only field.
+        self.schema_mode = schema_mode
+        # Server-specific request fields, e.g. {"chat_template_kwargs": {"enable_thinking": False}}
+        # to switch off Qwen3 thinking. Never sent to api.openai.com, which rejects unknown fields.
+        self.extra_body = dict(extra_body or {})
         key = api_key or os.environ.get("OPENAI_API_KEY") or ("EMPTY" if base_url else None)
         if key is None:
             raise RuntimeError("OPENAI_API_KEY is not set and no base_url was given")
@@ -74,20 +82,16 @@ class OpenAICompatLLM:
     def _is_vllm(self) -> bool:
         return bool(self.base_url) and "openai.com" not in self.base_url
 
-    def complete(self, system, user, *, json_schema=None, temperature=0.0, max_tokens=1024) -> str:
+    def request_kwargs(self, system: str, user: str, json_schema: dict[str, Any] | None,
+                       temperature: float, max_tokens: int) -> dict[str, Any]:
         schema = json_schema if self.constrained_decoding else None
-        cache_key = DiskCache.key(self.model, system, user, schema, temperature, max_tokens)
-        if self.cache is not None:
-            hit = self.cache.get(cache_key)
-            if hit is not None:
-                return hit
-
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         kwargs: dict[str, Any] = {"model": self.model, "messages": messages, "temperature": temperature,
                                   "max_tokens": max_tokens}
+        extra_body = dict(self.extra_body) if self._is_vllm() else {}
         if schema is not None:
-            if self._is_vllm():
-                kwargs["extra_body"] = {"guided_json": schema}
+            if self.schema_mode == "guided_json" and self._is_vllm():
+                extra_body["guided_json"] = schema
             else:
                 kwargs["response_format"] = {
                     "type": "json_schema",
@@ -96,7 +100,19 @@ class OpenAICompatLLM:
         elif json_schema is not None:
             # Unconstrained control: we still ask for JSON in the prompt, but do not enforce it.
             kwargs["messages"][0]["content"] += "\nRespond with a single JSON object and nothing else."
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        return kwargs
 
+    def complete(self, system, user, *, json_schema=None, temperature=0.0, max_tokens=1024) -> str:
+        schema = json_schema if self.constrained_decoding else None
+        cache_key = DiskCache.key(self.model, system, user, schema, temperature, max_tokens)
+        if self.cache is not None:
+            hit = self.cache.get(cache_key)
+            if hit is not None:
+                return hit
+
+        kwargs = self.request_kwargs(system, user, json_schema, temperature, max_tokens)
         resp = self.client.chat.completions.create(**kwargs)
         text = resp.choices[0].message.content or ""
         self.calls += 1

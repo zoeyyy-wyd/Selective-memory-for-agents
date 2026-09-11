@@ -68,6 +68,7 @@ class ExtractConfig(BaseModel):
     backend: Literal["heuristic", "llm"] = "heuristic"
     constrained_decoding: bool = True
     max_episode_tokens: int = 60
+    max_turn_tokens: int = 2000        # long ShareGPT essays/code are cut per turn before extraction
     cache_dir: str = ".cache/extract"
 
 
@@ -82,6 +83,9 @@ class ModelConfig(BaseModel):
     nli_model: str = "lexical"          # "lexical" (offline) or a HF cross-encoder, e.g. cross-encoder/nli-deberta-v3-base
     llm_cache_dir: str = ".cache/llm"
     embed_cache_dir: str = ".cache/embed"
+    schema_mode: Literal["response_format", "guided_json"] = "response_format"
+    # sent only to self-hosted servers (vLLM / llama.cpp); e.g. switch off Qwen3 thinking
+    extract_extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
 class SystemConfig(BaseModel):

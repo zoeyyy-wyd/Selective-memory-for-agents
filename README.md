@@ -65,6 +65,7 @@ evals/
   longmemeval/    loader (HF download), stratified dev/test split, judge wrapper
   metrics.py      evidence write / survival / injection rates, abstention, cost, bootstrap CIs (§10)
   run.py          smem-eval CLI; results/<run id>/{config.yaml, records.jsonl, summary.json}
+  extract_cache.py  smem-extract: parallel one-time extraction of every unique session
   ablations.yaml  one group per design decision + the two budget sweeps
 baselines/        oracle, full_context, naive_rag, mem0_oss (§02)
 configs/          default.yaml (real models), offline.yaml (no models)
@@ -148,15 +149,18 @@ are all in `records.jsonl`; `summary.json` has every aggregate with a bootstrap 
 
 ### Running the real experiments
 
-1. Serve the extraction model on the GPU box:
-   `vllm serve Qwen/Qwen3-8B-AWQ --guided-decoding-backend xgrammar --port 8000`
-   and point `models.extract_base_url` at it (SSH tunnel is fine; extraction is cached per session).
-2. `export OPENAI_API_KEY=...`; the answering and judge models are set in `configs/default.yaml`.
-3. Build order as in plan §13: oracle / full-context / naive-RAG baselines on dev, then the system with
+1. Serve the extraction model on the GPU box (24 GB is enough; sessions are ≤ 8.8k tokens):
+   `vllm serve Qwen/Qwen3-8B-AWQ --port 8000 --max-model-len 12288 --gpu-memory-utilization 0.9`
+   and point `models.extract_base_url` at it (an SSH tunnel is fine). `configs/default.yaml` already
+   switches Qwen3 thinking off and sends the schema as an OpenAI-style `response_format`.
+2. Prefill the extraction cache in parallel: `smem-extract --split dev --workers 32`. The runner
+   extracts serially per question, so do this first; it also prints the write error rate.
+3. `export OPENAI_API_KEY=...`; the answering and judge models are set in `configs/default.yaml`.
+4. Build order as in plan §13: oracle / full-context / naive-RAG baselines on dev, then the system with
    *B* unbounded, then the `evict` sweep at *B* ∈ {0.125, 0.06, 0.03, 0.015} (Figure 1), the `packing` sweep at
    *R* ∈ {1k, 2k, 4k, 8k} (Figure 2), and `validity_chain` by question type (Figure 3). Test split only at
    the end, with `--judge llm` and `models.judge_model: gpt-4o`.
-4. Fit the Hawkes parameters on dev with `HawkesIntensity.fit()` over the dev histories and put the
+5. Fit the Hawkes parameters on dev with `HawkesIntensity.fit()` over the dev histories and put the
    result in the config; set `read.tau_abs` from the dev abstention calibration.
 
 ## Results

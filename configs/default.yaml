@@ -1,4 +1,10 @@
 # Full system. Model names are only used with --backend llm.
+#
+# Extraction server (GPU box), 24 GB card:
+#   vllm serve Qwen/Qwen3-8B-AWQ --port 8000 --max-model-len 12288 --gpu-memory-utilization 0.9
+# then prefill the extraction cache in parallel before any evaluation run:
+#   smem-extract --split dev --workers 32
+# Sessions are at most 8.8k tokens on LongMemEval-S, so 12288 leaves room for a 2k-token output.
 name: default
 budget:
   store_tokens: 1000000000   # overridden by --store-budget (fraction of history tokens, or absolute)
@@ -22,6 +28,7 @@ read:
 extract:
   backend: llm
   constrained_decoding: true
+  max_turn_tokens: 2000
   cache_dir: .cache/extract
 models:
   embedder: BAAI/bge-m3
@@ -31,3 +38,6 @@ models:
   judge_model: gpt-4.1-mini
   nli_model: cross-encoder/nli-deberta-v3-base
   llm_cache_dir: .cache/llm
+  schema_mode: response_format          # OpenAI-style json_schema; vLLM routes it to xgrammar
+  extract_extra_body:
+    chat_template_kwargs: {enable_thinking: false}   # Qwen3 would otherwise emit <think> before the JSON

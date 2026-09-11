@@ -173,7 +173,8 @@ class SelectiveMemory:
 
 
 def build_llm(model: str, base_url: str | None, cfg: SystemConfig, constrained: bool = True) -> OpenAICompatLLM:
-    return OpenAICompatLLM(model, base_url=base_url, cache_dir=cfg.models.llm_cache_dir, constrained_decoding=constrained)
+    return OpenAICompatLLM(model, base_url=base_url, cache_dir=cfg.models.llm_cache_dir, constrained_decoding=constrained,
+                           schema_mode=cfg.models.schema_mode, extra_body=cfg.models.extract_extra_body)
 
 
 def build_system(cfg: SystemConfig, backend: str = "offline", store_path: str = ":memory:") -> SelectiveMemory:
@@ -186,7 +187,8 @@ def build_system(cfg: SystemConfig, backend: str = "offline", store_path: str = 
     answer_llm = build_llm(cfg.models.answer_model, cfg.models.answer_base_url, cfg)
     return SelectiveMemory(
         cfg,
-        extractor=LLMExtractor(extract_llm, cfg.extract.cache_dir, constrained, cfg.extract.max_episode_tokens),
+        extractor=LLMExtractor(extract_llm, cfg.extract.cache_dir, constrained, cfg.extract.max_episode_tokens,
+                               max_turn_tokens=cfg.extract.max_turn_tokens),
         answerer=LLMAnswerer(answer_llm),
         summarizer=LLMSummarizer(extract_llm, constrained),
         rewriter=extract_llm,

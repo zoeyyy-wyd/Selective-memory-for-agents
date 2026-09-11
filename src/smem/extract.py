@@ -257,10 +257,11 @@ class HeuristicExtractor:
 
 class LLMExtractor:
     def __init__(self, llm: LLM, cache_dir: str | Path | None = None, constrained_decoding: bool = True,
-                 max_episode_tokens: int = 60):
+                 max_episode_tokens: int = 60, max_turn_tokens: int = 2000):
         self.llm = llm
         self.constrained_decoding = constrained_decoding
         self.max_episode_tokens = max_episode_tokens
+        self.max_turn_tokens = max_turn_tokens
         self.cache = DiskCache(cache_dir) if cache_dir else None
         self.fallback = HeuristicExtractor(max_episode_tokens)
         self.n_calls = 0
@@ -268,13 +269,13 @@ class LLMExtractor:
 
     def extract(self, session: Session) -> ExtractionResult:
         key = DiskCache.key("extract", PROMPT_VERSION, self.llm.model, self.constrained_decoding,
-                            session.session_id, session.content_hash())
+                            self.max_turn_tokens, session.session_id, session.content_hash())
         raw = self.cache.get(key) if self.cache else None
         if raw is None:
             raw = self.llm.complete(
                 SYSTEM_PROMPT.format(date=session.ts.strftime("%Y-%m-%d"),
                                      attributes=", ".join(f'"{k}" ({v})' for k, v in CANONICAL_ATTRIBUTES.items())),
-                _render_session(session),
+                _render_session(session, self.max_turn_tokens),
                 json_schema=EXTRACTION_SCHEMA if self.constrained_decoding else None,
                 max_tokens=2048,
             )
@@ -355,10 +356,18 @@ class LLMExtractor:
         return ExtractionResult(session_id=session.session_id, episodes=episodes, facts=facts, schema_ok=ok, raw=raw)
 
 
-def _render_session(session: Session) -> str:
+def _render_session(session: Session, max_turn_tokens: int | None = None) -> str:
+    """Turns longer than max_turn_tokens (long assistant essays and code dumps) are cut in the middle;
+    both ends are kept because user facts tend to sit at the start and follow-ups at the end."""
     lines = []
     for i, t in enumerate(session.turns):
-        lines.append(f"[{i}] {t.role}: {t.content.strip()}")
+        content = t.content.strip()
+        if max_turn_tokens and count_tokens(content) > max_turn_tokens:
+            words = content.split()
+            keep = max(20, int(len(words) * max_turn_tokens / count_tokens(content)))
+            half = keep // 2
+            content = " ".join(words[:half]) + " [...] " + " ".join(words[-half:])
+        lines.append(f"[{i}] {t.role}: {content}")
     return "\n".join(lines)
 
 
