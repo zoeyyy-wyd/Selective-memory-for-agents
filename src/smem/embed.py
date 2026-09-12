@@ -106,10 +106,10 @@ class CachedEmbedder:
         return out
 
 
-def get_embedder(name: str, dim: int = 256, cache_dir: str | None = None) -> Embedder:
+def get_embedder(name: str, dim: int = 256, cache_dir: str | None = None, device: str | None = None) -> Embedder:
     if name == "hash":
         return HashEmbedder(dim)
-    model = SentenceTransformerEmbedder(name)
+    model = SentenceTransformerEmbedder(name, device=device)
     if cache_dir:
         return CachedEmbedder(model, name, f"{cache_dir}/{name.replace('/', '__')}.sqlite")
     return model

@@ -76,7 +76,8 @@ def build_baseline(name: str, cfg: SystemConfig, backend: str) -> Baseline:
         from baselines.naive_rag import NaiveRAGBaseline
         from smem.embed import get_embedder
 
-        b = NaiveRAGBaseline(llm, get_embedder(cfg.models.embedder, cfg.models.embed_dim), cfg.budget.read_tokens)
+        b = NaiveRAGBaseline(llm, get_embedder(cfg.models.embedder, cfg.models.embed_dim, cfg.models.embed_cache_dir,
+                                             device=cfg.models.embed_device), cfg.budget.read_tokens)
         b.answer_max_tokens = cfg.models.answer_max_tokens
         return b
     if name == "mem0_oss":

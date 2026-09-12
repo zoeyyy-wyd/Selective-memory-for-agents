@@ -66,7 +66,8 @@ class SelectiveMemory:
         store_path: str = ":memory:",
     ):
         self.cfg = cfg
-        self.embedder = embedder or get_embedder(cfg.models.embedder, cfg.models.embed_dim, cfg.models.embed_cache_dir)
+        self.embedder = embedder or get_embedder(cfg.models.embedder, cfg.models.embed_dim, cfg.models.embed_cache_dir,
+                                                device=cfg.models.embed_device)
         self.extractor = extractor or HeuristicExtractor(cfg.extract.max_episode_tokens)
         self.answerer = answerer or ExtractiveAnswerer()
         self.store = MemoryStore(self.embedder.dim, store_path)

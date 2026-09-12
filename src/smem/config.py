@@ -86,6 +86,7 @@ class ExtractConfig(BaseModel):
 class ModelConfig(BaseModel):
     embedder: str = "hash"              # "hash" (offline) or a sentence-transformers name, e.g. BAAI/bge-m3
     embed_dim: int = 256                # used by the hash embedder only
+    embed_device: str | None = None     # None = sentence-transformers default (cuda if free); "cpu" if vLLM owns the card
     extract_model: str = "Qwen/Qwen3-8B-AWQ"
     extract_base_url: str = "http://localhost:8000/v1"
     answer_model: str = "gpt-4.1-mini"
