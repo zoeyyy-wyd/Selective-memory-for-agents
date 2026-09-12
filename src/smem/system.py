@@ -23,7 +23,7 @@ from smem.embed import Embedder, get_embedder
 from smem.evict import Evictor
 from smem.extract import Extractor, HeuristicExtractor, LLMExtractor
 from smem.hawkes import HawkesIntensity
-from smem.llm import LLM, OpenAICompatLLM
+from smem.llm import LLM, AnthropicLLM, OpenAICompatLLM
 from smem.read import Reader, ReadResult
 from smem.schemas import Fact, Session
 from smem.store import MemoryStore, key_drift
@@ -172,9 +172,31 @@ class SelectiveMemory:
         self.store.close()
 
 
-def build_llm(model: str, base_url: str | None, cfg: SystemConfig, constrained: bool = True) -> OpenAICompatLLM:
+def resolve_provider(model: str, base_url: str | None, setting: str = "auto") -> str:
+    """A base_url always means a self-hosted OpenAI-compatible server (vLLM, llama.cpp), so it wins
+    over the model name; otherwise claude-* goes to the Anthropic SDK. Never an OpenAI-compatible
+    shim for Claude — the two wire formats differ (see AnthropicLLM)."""
+    if setting != "auto":
+        return setting
+    if base_url:
+        return "openai"
+    return "anthropic" if model.startswith("claude-") else "openai"
+
+
+def build_llm(model: str, base_url: str | None, cfg: SystemConfig, constrained: bool = True,
+              provider: str = "auto", extra_body: dict | None = None) -> LLM:
+    """`extra_body` is vendor-specific and must be passed only by the caller that owns the server it
+    is meant for -- it used to be sent to every client, which was harmless only as long as answering
+    went to api.openai.com. Behind an OpenAI-compatible gateway (TokenRouter, LiteLLM, ...) the
+    answering client also has a base_url, and Qwen3's chat_template_kwargs would be forwarded to a
+    router fronting GPT or Claude."""
+    if resolve_provider(model, base_url, provider) == "anthropic":
+        a = cfg.anthropic
+        return AnthropicLLM(model, cache_dir=cfg.models.llm_cache_dir, constrained_decoding=constrained,
+                            thinking=a.thinking, effort=a.effort, fallback_model=a.fallback_model,
+                            max_retries=a.max_retries, timeout=a.timeout)
     return OpenAICompatLLM(model, base_url=base_url, cache_dir=cfg.models.llm_cache_dir, constrained_decoding=constrained,
-                           schema_mode=cfg.models.schema_mode, extra_body=cfg.models.extract_extra_body)
+                           schema_mode=cfg.models.schema_mode, extra_body=extra_body)
 
 
 def build_system(cfg: SystemConfig, backend: str = "offline", store_path: str = ":memory:") -> SelectiveMemory:
@@ -183,12 +205,15 @@ def build_system(cfg: SystemConfig, backend: str = "offline", store_path: str = 
     if backend == "offline":
         return SelectiveMemory(cfg, store_path=store_path)
     constrained = cfg.extract.constrained_decoding
-    extract_llm = build_llm(cfg.models.extract_model, cfg.models.extract_base_url, cfg, constrained)
-    answer_llm = build_llm(cfg.models.answer_model, cfg.models.answer_base_url, cfg)
+    extract_llm = build_llm(cfg.models.extract_model, cfg.models.extract_base_url, cfg, constrained,
+                            extra_body=cfg.models.extract_extra_body)
+    answer_llm = build_llm(cfg.models.answer_model, cfg.models.answer_base_url, cfg,
+                           provider=cfg.models.answer_provider)
     return SelectiveMemory(
         cfg,
         extractor=LLMExtractor(extract_llm, cfg.extract.cache_dir, constrained, cfg.extract.max_episode_tokens,
-                               max_turn_tokens=cfg.extract.max_turn_tokens),
+                               max_turn_tokens=cfg.extract.max_turn_tokens,
+                               max_output_tokens=cfg.extract.max_output_tokens),
         answerer=LLMAnswerer(answer_llm),
         summarizer=LLMSummarizer(extract_llm, constrained),
         rewriter=extract_llm,

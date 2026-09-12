@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 
 from smem.answer import format_entry
-from smem.config import SystemConfig, parse_override
+from smem.config import SystemConfig, load_dotenv, parse_override
 from smem.extract import load_sessions_from_json
 from smem.schemas import Fact
 from smem.system import build_system
@@ -24,6 +24,7 @@ def describe(mem, entry_id: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_dotenv()
     p = argparse.ArgumentParser(description="Selective memory demo")
     p.add_argument("--conversation", required=True, help="JSON list of sessions (see demo/sample_conversation.json)")
     p.add_argument("--config", default="configs/offline.yaml")

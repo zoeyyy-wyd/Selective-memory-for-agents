@@ -18,6 +18,7 @@ EvictPolicyName = Literal["fifo", "lru", "random", "utility_heuristic", "swap", 
 ConsolidationName = Literal["redundancy", "fixed_interval", "no_consolidation", "no_nli_check"]
 RetrievalName = Literal["single_hop", "two_hop"]
 PackingName = Literal["topk", "mmr", "budgeted_greedy"]
+ProviderName = Literal["auto", "openai", "anthropic"]
 
 
 class WriteConfig(BaseModel):
@@ -69,6 +70,11 @@ class ExtractConfig(BaseModel):
     constrained_decoding: bool = True
     max_episode_tokens: int = 60
     max_turn_tokens: int = 2000        # long ShareGPT essays/code are cut per turn before extraction
+    # 2048 truncated 190 of 4564 dev sessions mid-JSON (4.2%): rich sessions produce more
+    # episodes+facts than that. Not part of the extraction cache key on purpose -- at
+    # temperature 0 an output that finished on its own is byte-identical under a larger cap,
+    # so only the truncated entries are stale and the rest stay valid.
+    max_output_tokens: int = 4096
     cache_dir: str = ".cache/extract"
 
 
@@ -80,12 +86,34 @@ class ModelConfig(BaseModel):
     answer_model: str = "gpt-4.1-mini"
     answer_base_url: str | None = None
     judge_model: str = "gpt-4.1-mini"
+    judge_base_url: str | None = None
+    # The judge answers in a word, but a reasoning judge spends its budget before any text; 10 was
+    # enough for gpt-4.1-mini and returns an empty string on gpt-5-mini. See LLMJudge.
+    judge_max_tokens: int = 512
     nli_model: str = "lexical"          # "lexical" (offline) or a HF cross-encoder, e.g. cross-encoder/nli-deberta-v3-base
     llm_cache_dir: str = ".cache/llm"
     embed_cache_dir: str = ".cache/embed"
     schema_mode: Literal["response_format", "guided_json"] = "response_format"
+    # "auto" sends claude-* models to the Anthropic SDK and everything else to the OpenAI-compatible
+    # client. Extraction is deliberately not routed here: it stays on the local vLLM server.
+    answer_provider: ProviderName = "auto"
+    judge_provider: ProviderName = "auto"
     # sent only to self-hosted servers (vLLM / llama.cpp); e.g. switch off Qwen3 thinking
     extract_extra_body: dict[str, Any] = Field(default_factory=dict)
+
+
+class AnthropicConfig(BaseModel):
+    """Applies to whichever calls route to the Anthropic SDK. Both answering and judging want the
+    model to read the injected memory, not to reason its way around a gap in it: thinking off (or
+    low effort) keeps the measurement about the memory system rather than the reader."""
+
+    thinking: Literal["off", "adaptive"] = "off"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    # Re-runs a declined request on another model inside the same call. Off by default: in an
+    # ablation it would silently mix two answering models into one run. See AnthropicLLM.
+    fallback_model: str | None = None
+    max_retries: int = 2
+    timeout: float = 600.0
 
 
 class SystemConfig(BaseModel):
@@ -97,6 +125,7 @@ class SystemConfig(BaseModel):
     read: ReadConfig = Field(default_factory=ReadConfig)
     extract: ExtractConfig = Field(default_factory=ExtractConfig)
     models: ModelConfig = Field(default_factory=ModelConfig)
+    anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig)
 
     def config_hash(self) -> str:
         payload = json.dumps(self.model_dump(mode="json"), sort_keys=True)
@@ -130,3 +159,29 @@ def parse_override(text: str) -> tuple[str, Any]:
     if not _:
         raise ValueError(f"override must look like key=value, got {text!r}")
     return key.strip(), yaml.safe_load(raw.strip())
+
+
+def load_dotenv(path: str | Path = ".env") -> list[str]:
+    """Read KEY=value lines from a .env file into os.environ without overwriting anything already
+    exported. Stdlib only; keys live in a gitignored file rather than on the command line."""
+    import os
+
+    p = Path(path)
+    if not p.exists():
+        return []
+    loaded = []
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and value and key not in os.environ:
+            os.environ[key] = value
+            loaded.append(key)
+    return loaded

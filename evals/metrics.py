@@ -102,6 +102,7 @@ def aggregate(records: list[QuestionRecord], n_boot: int = 1000, seed: int = 0) 
         by_type[r.stratum].append(r)
     out: dict[str, Any] = {
         "n": len(records),
+        "n_judged": len(judged),   # < n means the judge returned no verdict on some questions
         "accuracy": bootstrap_ci([float(r.correct) for r in judged], n_boot, seed),
         "accuracy_by_type": {t: bootstrap_ci([float(r.correct) for r in rs], n_boot, seed) for t, rs in sorted(by_type.items())},
         "evidence_write_rate": bootstrap_ci([_rate(r.n_written, r.n_evidence) for r in answerable], n_boot, seed),

@@ -103,3 +103,32 @@ def test_judge_prompts_and_exact_judge(tmp_path):
     j = ExactMatchJudge()
     assert j.judge(qs[0], "The user lives in Boston [f_1].") and not j.judge(qs[0], "Seattle")
     assert j.judge(qs[2], "I don't know.") and not j.judge(qs[2], "A Toyota")
+
+
+def test_empty_judge_verdict_is_ungraded_not_wrong():
+    """A reasoning judge out of max_tokens returns "". That used to read as 'answered wrong' with
+    nothing logged, i.e. a silent accuracy of 0."""
+    from evals.longmemeval.judge import LLMJudge, parse_verdict
+    from smem.llm import ScriptedLLM
+
+    assert parse_verdict("") is None
+    assert parse_verdict("no, the answer is not yes") is False   # upstream substring rule says True
+    assert parse_verdict("Yes.") is True
+
+    j = LLMJudge(ScriptedLLM(["", "yes", "I cannot tell"]))
+    assert j.max_tokens == 512   # not the 10 the terse prompt needs: a reasoning judge needs room
+    assert j.health() is None    # nothing has gone wrong yet
+    j.n_empty, j.n_unparsed = 3, 1
+    assert "4 calls" in j.health() and "3 empty" in j.health()
+
+
+def test_aggregate_excludes_unjudged_from_accuracy():
+    from evals.metrics import QuestionRecord, aggregate
+
+    def rec(qid, correct):
+        return QuestionRecord(question_id=qid, question_type="multi-session", is_abstention=False,
+                              question="q", gold="g", answer="a", abstained=False, correct=correct)
+
+    s = aggregate([rec("a", True), rec("b", False), rec("c", None)], n_boot=50, seed=0)
+    assert s["n"] == 3 and s["n_judged"] == 2
+    assert s["accuracy"]["mean"] == 0.5      # the unjudged one is dropped, not counted wrong

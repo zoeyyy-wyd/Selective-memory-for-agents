@@ -5,6 +5,7 @@ stand-in for tests and dry runs."""
 
 from __future__ import annotations
 
+import re
 from typing import Protocol
 
 from evals.longmemeval.data import LMEQuestion
@@ -57,17 +58,53 @@ def judge_prompt(q: LMEQuestion, response: str) -> str:
 class Judge(Protocol):
     name: str
 
-    def judge(self, q: LMEQuestion, response: str) -> bool: ...
+    def judge(self, q: LMEQuestion, response: str) -> bool | None: ...
+
+
+_VERDICT_RE = re.compile(r"\b(yes|no)\b")
+
+
+def parse_verdict(text: str) -> bool | None:
+    """First standalone yes/no wins; None when the judge said neither.
+
+    Upstream tests `"yes" in response.lower()`, which agrees with this on the terse output the prompt
+    asks for but calls "no, not yes" a yes. None is not False: `summarise` drops unjudged records
+    from accuracy, so a judge that fails to answer shows up as a smaller n instead of silently
+    scoring every response wrong."""
+    m = _VERDICT_RE.search(text.strip().lower())
+    return None if m is None else m.group(1) == "yes"
 
 
 class LLMJudge:
-    def __init__(self, llm: LLM):
-        self.llm = llm
-        self.name = f"llm:{llm.model}"
+    """`max_tokens` defaults to 512, not the 10 the terse prompt needs. A reasoning model spends its
+    budget before emitting any text -- openai/gpt-5-mini returns an empty string at 10 -- and an
+    empty verdict used to read as "answered wrong" with nothing logged. Output here is a word or two,
+    so the extra headroom costs nothing on a non-reasoning judge."""
 
-    def judge(self, q: LMEQuestion, response: str) -> bool:
-        out = self.llm.complete("", judge_prompt(q, response), temperature=0.0, max_tokens=10)
-        return "yes" in out.strip().lower()
+    def __init__(self, llm: LLM, max_tokens: int = 512):
+        self.llm = llm
+        self.max_tokens = max_tokens
+        self.name = f"llm:{llm.model}"
+        self.n_empty = 0
+        self.n_unparsed = 0
+
+    def judge(self, q: LMEQuestion, response: str) -> bool | None:
+        out = self.llm.complete("", judge_prompt(q, response), temperature=0.0, max_tokens=self.max_tokens)
+        verdict = parse_verdict(out)
+        if not out.strip():
+            self.n_empty += 1
+        elif verdict is None:
+            self.n_unparsed += 1
+        return verdict
+
+    def health(self) -> str | None:
+        """Non-None means the judge itself misbehaved and the accuracy column is not trustworthy."""
+        bad = self.n_empty + self.n_unparsed
+        if not bad:
+            return None
+        return (f"judge {self.llm.model} returned no verdict on {bad} calls "
+                f"({self.n_empty} empty, {self.n_unparsed} unparseable); those questions are unjudged. "
+                f"An empty verdict usually means a reasoning model ran out of max_tokens={self.max_tokens}.")
 
 
 class ExactMatchJudge:
@@ -76,7 +113,7 @@ class ExactMatchJudge:
 
     name = "exact"
 
-    def judge(self, q: LMEQuestion, response: str) -> bool:
+    def judge(self, q: LMEQuestion, response: str) -> bool | None:
         r = response.strip().lower()
         if q.is_abstention:
             return r.startswith("i don't know") or "not" in r and "information" in r

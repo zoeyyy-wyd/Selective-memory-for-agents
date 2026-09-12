@@ -257,15 +257,21 @@ class HeuristicExtractor:
 
 class LLMExtractor:
     def __init__(self, llm: LLM, cache_dir: str | Path | None = None, constrained_decoding: bool = True,
-                 max_episode_tokens: int = 60, max_turn_tokens: int = 2000):
+                 max_episode_tokens: int = 60, max_turn_tokens: int = 2000,
+                 max_output_tokens: int = 4096):
         self.llm = llm
         self.constrained_decoding = constrained_decoding
         self.max_episode_tokens = max_episode_tokens
         self.max_turn_tokens = max_turn_tokens
+        self.max_output_tokens = max_output_tokens
         self.cache = DiskCache(cache_dir) if cache_dir else None
         self.fallback = HeuristicExtractor(max_episode_tokens)
         self.n_calls = 0
         self.n_schema_errors = 0
+        # attribute='other' with no custom_attribute: a softer violation than broken JSON,
+        # counted apart so the headline error rate means 'output we could not use'.
+        self.n_missing_custom_attr = 0
+        self.n_truncated = 0
 
     def extract(self, session: Session) -> ExtractionResult:
         key = DiskCache.key("extract", PROMPT_VERSION, self.llm.model, self.constrained_decoding,
@@ -277,7 +283,7 @@ class LLMExtractor:
                                      attributes=", ".join(f'"{k}" ({v})' for k, v in CANONICAL_ATTRIBUTES.items())),
                 _render_session(session, self.max_turn_tokens),
                 json_schema=EXTRACTION_SCHEMA if self.constrained_decoding else None,
-                max_tokens=2048,
+                max_tokens=self.max_output_tokens,
             )
             self.n_calls += 1
             if self.cache:
@@ -290,6 +296,10 @@ class LLMExtractor:
     def parse(self, session: Session, raw: str) -> ExtractionResult:
         obj = parse_json_object(raw)
         if obj is None or not isinstance(obj.get("episodes"), list) or not isinstance(obj.get("facts"), list):
+            # An unparseable body that does not close its own JSON is a hit on the output cap, not a
+            # constrained-decoding failure; the distinction decides whether to raise the cap or the prompt.
+            if obj is None and not raw.rstrip().endswith(("}", "]")):
+                self.n_truncated += 1
             fb = self.fallback.extract(session)
             return ExtractionResult(session_id=session.session_id, episodes=fb.episodes, facts=fb.facts,
                                     schema_ok=False, raw=raw)
@@ -325,17 +335,26 @@ class LLMExtractor:
         for item in obj["facts"]:
             try:
                 idx = int(item["turn_idx"])
+                value_raw = str(item["value"]).strip()
                 entity = canonical_entity(str(item["entity"]))
                 raw_attr = canonical_attribute(str(item["attribute"]))
                 if raw_attr == "other":
                     attribute = canonical_attribute(str(item.get("custom_attribute") or ""))
+                    if not attribute:
+                        # The schema's enum offers "other" but cannot require custom_attribute
+                        # alongside it, and the model does skip it. Dropping the fact loses it
+                        # outright; keying it on "other" would be worse still, since a second
+                        # "other" fact about the same entity would read as a knowledge update and
+                        # open a bogus validity chain. Derive a distinct key from the value instead.
+                        attribute = _attr_from_value(value_raw)
+                        self.n_missing_custom_attr += 1
                 elif raw_attr in CANONICAL_ATTRIBUTES:
                     attribute = raw_attr
                 else:
                     # only reachable without constrained decoding: keep the fact, count the violation
                     attribute = raw_attr
                     ok = False
-                value = str(item["value"]).strip()
+                value = value_raw
                 kind = item.get("kind", "stated")
                 if kind not in ("stated", "preference", "inferred") or not attribute or not value:
                     raise ValueError("bad fact")
@@ -354,6 +373,13 @@ class LLMExtractor:
             except (KeyError, ValueError, TypeError):
                 ok = False
         return ExtractionResult(session_id=session.session_id, episodes=episodes, facts=facts, schema_ok=ok, raw=raw)
+
+
+def _attr_from_value(value: str, max_words: int = 3) -> str:
+    """Fallback key for a fact the model marked "other" without naming a custom_attribute. The
+    leading words of the value keep two such facts about one entity on different keys."""
+    words = re.findall(r"[a-z0-9]+", value.lower())[:max_words]
+    return "_".join(words)[:40] or "other"
 
 
 def _render_session(session: Session, max_turn_tokens: int | None = None) -> str:

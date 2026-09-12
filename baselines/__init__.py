@@ -56,7 +56,8 @@ def render_turns(q: LMEQuestion, session_filter: set[str] | None = None, only_ev
 def build_baseline(name: str, cfg: SystemConfig, backend: str) -> Baseline:
     from smem.system import build_llm
 
-    llm = None if backend == "offline" else build_llm(cfg.models.answer_model, cfg.models.answer_base_url, cfg)
+    llm = (None if backend == "offline" else
+           build_llm(cfg.models.answer_model, cfg.models.answer_base_url, cfg, provider=cfg.models.answer_provider))
     if name == "oracle":
         from baselines.oracle import OracleBaseline
 

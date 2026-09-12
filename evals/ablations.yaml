@@ -32,10 +32,48 @@ groups:
     constrained:        {extract.constrained_decoding: true}
     no_constrained_decoding: {extract.constrained_decoding: false}
 # Figure 1: store budget sweep (fractions of history tokens); Figure 2: read budget sweep.
-# Extraction compresses a history to ~13% of its tokens, so the store only fills up below ~12.5%:
-# at 25% and above no entry is ever evicted and all six eviction policies produce identical stores.
-# Reference line for "no pressure" is an omitted --store-budget, not 1.0.
 # Reference: pass these to --store-budget / --read-budget; the runner does not read this block.
+#
+# Both sweeps have a degenerate end, measured offline on dev (6 questions, heuristic extractor):
+#
+#   store_budget  swap vs fifo, identical injected context
+#     0.125            6/6      <- store uses ~10.9k against a ~12.9k budget: nothing is ever evicted
+#     0.06             0/6
+#     0.03             0/6
+#     0.015            0/6
+#
+#   read_budget   budgeted_greedy vs topk, identical injected context   injected tokens
+#     8000             6/6                                                  1083   <- candidate set
+#     4000             6/6                                                  1083      exhausted; the
+#     2000             6/6                                                  1045      budget never binds
+#     1000             2/6                                                   833   <- packing binds here
+#
+# So B=0.125 is kept as the free "no pressure" anchor -- all six eviction policies produce the same
+# store there, so five of the six runs are DiskCache hits -- and it is NOT a stress test: the plan's
+# risk mitigation calls for an extreme test at 12.5%, where every policy scores identically by
+# construction. Use 0.015 for that.
+#
+# The read budgets below are PROVISIONAL. The plateau above moves up with the real Qwen3-8B
+# extractor, which pulls more entries per session than the heuristic one. Re-measure it once the
+# extraction cache is built. Point answering at the local vLLM server too, so this costs no API
+# calls -- only injected_tokens is being read, and --backend llm would otherwise bill the answerer:
+#   for r in 250 500 1000 2000 4000; do
+#     smem-eval --split dev --backend llm --judge exact --limit 20 --store-budget 0.03 \
+#               --read-budget $r --ablate read.packing=topk \
+#               --ablate models.answer_model=Qwen/Qwen3-8B-AWQ \
+#               --ablate models.answer_base_url=http://localhost:8000/v1
+#   done
+# and put four points spanning the region where injected_tokens still tracks the budget. Points
+# above the plateau cost the most per call (R tokens of input each) and carry no information.
 sweeps:
   store_budget: [0.125, 0.06, 0.03, 0.015]
-  read_budget: [1000, 2000, 4000, 8000]
+  read_budget: [250, 500, 1000, 2000]
+
+# Figure 1 does not need all six policies at all four budgets. The full curve is what the headline
+# claim ("swap degrades more gracefully") needs; the rest only have to be beaten where the pressure
+# is real. ~15 distinct runs instead of 24:
+#   all six policies      at B in {0.03, 0.015}
+#   swap + lru            at B in {0.125, 0.06} as well
+figure1:
+  full_curve: [swap, lru]
+  tight_only: [fifo, random, utility_heuristic, swap_no_hawkes]

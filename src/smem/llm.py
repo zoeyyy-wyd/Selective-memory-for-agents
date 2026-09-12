@@ -7,6 +7,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+from collections import Counter
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -78,8 +80,15 @@ class OpenAICompatLLM:
         self.calls = 0
         self.prompt_tokens = 0
         self.completion_tokens = 0
+        # A routing gateway may serve a request with a model other than the one asked for. Every
+        # ablation in this project assumes the answering model is held constant, so substitution is
+        # silent corruption of the comparison, not a performance detail: count what actually served.
+        self.served_models: Counter[str] = Counter()
 
     def _is_vllm(self) -> bool:
+        """Self-hosted OpenAI-compatible server, i.e. one that takes vLLM's vendor fields. A hosted
+        gateway also has a base_url, so this is only ever consulted for extraction, whose server is
+        pinned by `extract_base_url`; `extra_body` is now passed in by that caller alone."""
         return bool(self.base_url) and "openai.com" not in self.base_url
 
     def request_kwargs(self, system: str, user: str, json_schema: dict[str, Any] | None,
@@ -116,11 +125,162 @@ class OpenAICompatLLM:
         resp = self.client.chat.completions.create(**kwargs)
         text = resp.choices[0].message.content or ""
         self.calls += 1
+        served = getattr(resp, "model", None) or self.model
+        self.served_models[served] += 1
         if resp.usage is not None:
             self.prompt_tokens += resp.usage.prompt_tokens or 0
             self.completion_tokens += resp.usage.completion_tokens or 0
         if self.cache is not None:
-            self.cache.put(cache_key, text, {"model": self.model})
+            self.cache.put(cache_key, text, {"model": self.model, "served_model": served})
+        return text
+
+    @staticmethod
+    def _norm_model(name: str) -> str:
+        """Gateway ids carry a vendor prefix and come back resolved to a dated snapshot -- asking for
+        `openai/gpt-5-mini` is served by `gpt-5-mini-2025-08-07`. Same model, so normalise both away
+        before comparing; anything still different is a real reroute."""
+        name = name.split("/")[-1].lower()
+        return re.sub(r"[-@]?\d{4}[-_]?\d{2}[-_]?\d{2}$", "", name).rstrip("-@")
+
+    def substitutions(self) -> dict[str, int]:
+        """Responses served by a different model than requested. Non-empty means the gateway rerouted
+        and the run is not a controlled comparison; report it, do not average over it."""
+        want = self._norm_model(self.model)
+        return {m: n for m, n in self.served_models.items() if self._norm_model(m) != want}
+
+
+# Claude models that reject `output_config.effort` and take thinking only as an explicit budget.
+# For these, thinking is off simply by omitting the parameter.
+_NO_EFFORT_PREFIXES = ("claude-haiku-4-5", "claude-sonnet-4-5", "claude-haiku-3", "claude-3")
+# Adaptive thinking draws from max_tokens; leave room or the text block comes back empty.
+THINKING_MIN_TOKENS = 4096
+
+
+class AnthropicLLM:
+    """Anthropic Messages API behind the same `LLM` protocol as `OpenAICompatLLM`, so answering and
+    judging can be pointed at Claude without touching the read/write pipeline.
+
+    Five things differ from the OpenAI path and are absorbed here rather than leaking outward:
+
+    * `temperature` was removed on Claude 4.6+ and is a 400 if sent. It is accepted and ignored;
+      rerun determinism comes from `DiskCache`, as it already did on the OpenAI path.
+    * Structured output is `output_config.format`, not `response_format`.
+    * Thinking is ON by default on Sonnet 5 / Opus 5 and its tokens are drawn from `max_tokens`, so
+      the judge's `max_tokens=10` would be spent before any text is emitted. Thinking is therefore
+      off by default here, and `max_tokens` gets a floor whenever it is switched on.
+    * An empty system prompt (`LLMJudge` passes "") must be omitted, not sent as "".
+    * A policy decline arrives as HTTP 200 with `stop_reason="refusal"`, not as an exception.
+
+    On refusals: the server-side `fallbacks` parameter is deliberately NOT enabled by default. It
+    would re-run a declined request on a different model inside the same call, which in an ablation
+    would silently put two different answering models in one run and break the controlled
+    comparison. Refusals are counted in `n_refusals` and surface as an empty answer (scored wrong)
+    so they stay visible. Set `fallback_model` if you would rather trade that visibility for
+    coverage; LongMemEval content is benign, so the expected count is zero either way.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        api_key: str | None = None,
+        cache_dir: str | Path | None = None,
+        constrained_decoding: bool = True,
+        thinking: str = "off",              # "off" | "adaptive"
+        effort: str | None = None,          # None | low | medium | high | xhigh | max
+        fallback_model: str | None = None,
+        max_retries: int = 2,
+        timeout: float = 600.0,
+    ):
+        # Validated before the SDK import so a bad config fails the same way with or without it.
+        if thinking not in ("off", "adaptive"):
+            raise ValueError(f"thinking must be 'off' or 'adaptive', got {thinking!r}")
+        # Documented 400: thinking cannot be disabled above effort 'high' on Opus 5.
+        if thinking == "off" and effort in ("xhigh", "max"):
+            raise ValueError(f"thinking='off' is rejected at effort={effort!r}; use thinking='adaptive'")
+
+        # Local import keeps the offline path free of network clients.
+        from anthropic import Anthropic
+
+        self.model = model
+        self.base_url = None                # kept so callers can treat both clients alike
+        self.constrained_decoding = constrained_decoding
+        self.thinking = thinking
+        self.effort = effort
+        self.fallback_model = fallback_model
+        kwargs: dict[str, Any] = {"max_retries": max_retries, "timeout": timeout}
+        # Omitted api_key lets the SDK resolve ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or an
+        # `ant auth login` profile; passing an explicit None would not.
+        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if key:
+            kwargs["api_key"] = key
+        self.client = Anthropic(**kwargs)
+        self.cache = DiskCache(cache_dir) if cache_dir else None
+        self.calls = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.n_refusals = 0
+        self.n_truncated = 0
+
+    def _supports_effort(self) -> bool:
+        return not self.model.startswith(_NO_EFFORT_PREFIXES)
+
+    def request_kwargs(self, system: str, user: str, json_schema: dict[str, Any] | None,
+                       temperature: float, max_tokens: int) -> dict[str, Any]:
+        """Built separately from the call so the wire format is testable without a network client,
+        exactly as `OpenAICompatLLM.request_kwargs` is. `temperature` is ignored (see class docstring)."""
+        schema = json_schema if self.constrained_decoding else None
+        messages = [{"role": "user", "content": user}]
+        kwargs: dict[str, Any] = {"model": self.model, "max_tokens": max_tokens, "messages": messages}
+        if system:
+            kwargs["system"] = system
+        if self._supports_effort():
+            if self.thinking == "adaptive":
+                kwargs["thinking"] = {"type": "adaptive"}
+                kwargs["max_tokens"] = max(max_tokens, THINKING_MIN_TOKENS)
+            else:
+                kwargs["thinking"] = {"type": "disabled"}
+        # Haiku 4.5 and older: omitting `thinking` already means no thinking, and `effort` is a 400.
+        output_config: dict[str, Any] = {}
+        if self.effort is not None and self._supports_effort():
+            output_config["effort"] = self.effort
+        if schema is not None:
+            output_config["format"] = {"type": "json_schema", "schema": schema}
+        elif json_schema is not None:
+            # Unconstrained control arm: ask for JSON in the prompt but do not enforce it, matching
+            # the `no_constrained_decoding` ablation on the OpenAI path.
+            instruction = "Respond with a single JSON object and nothing else."
+            kwargs["system"] = (kwargs["system"] + "\n" + instruction) if system else instruction
+        if output_config:
+            kwargs["output_config"] = output_config
+        if self.fallback_model:
+            kwargs["betas"] = ["server-side-fallback-2026-06-01"]
+            kwargs["fallbacks"] = [{"model": self.fallback_model}]
+        return kwargs
+
+    def complete(self, system, user, *, json_schema=None, temperature=0.0, max_tokens=1024) -> str:
+        schema = json_schema if self.constrained_decoding else None
+        cache_key = DiskCache.key(self.model, system, user, schema, temperature, max_tokens)
+        if self.cache is not None:
+            hit = self.cache.get(cache_key)
+            if hit is not None:
+                return hit
+
+        kwargs = self.request_kwargs(system, user, json_schema, temperature, max_tokens)
+        create = self.client.beta.messages.create if self.fallback_model else self.client.messages.create
+        resp = create(**kwargs)
+        self.calls += 1
+        if resp.usage is not None:
+            self.prompt_tokens += resp.usage.input_tokens or 0
+            self.completion_tokens += resp.usage.output_tokens or 0
+        if resp.stop_reason == "refusal":
+            self.n_refusals += 1
+            return ""
+        if resp.stop_reason == "max_tokens":
+            # With thinking on this means the budget went to reasoning; without it, a long answer.
+            self.n_truncated += 1
+        text = "".join(b.text for b in resp.content if b.type == "text")
+        if self.cache is not None:
+            self.cache.put(cache_key, text, {"model": self.model, "stop_reason": resp.stop_reason})
         return text
 
 

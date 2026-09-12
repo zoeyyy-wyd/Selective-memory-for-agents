@@ -30,7 +30,7 @@ from evals.longmemeval.data import (
 from evals.longmemeval.judge import ExactMatchJudge, Judge, LLMJudge, NoJudge
 from evals.longmemeval.split import load_split, save_split, stratified_split
 from evals.metrics import QuestionRecord, aggregate, evidence_counts, format_summary
-from smem.config import SystemConfig, parse_override
+from smem.config import SystemConfig, load_dotenv, parse_override
 from smem.system import SelectiveMemory, build_llm, build_system
 
 
@@ -88,7 +88,9 @@ def build_judge(name: str, cfg: SystemConfig) -> Judge:
     if name == "exact":
         return ExactMatchJudge()
     if name == "llm":
-        return LLMJudge(build_llm(cfg.models.judge_model, None, cfg))
+        return LLMJudge(build_llm(cfg.models.judge_model, cfg.models.judge_base_url, cfg,
+                                  provider=cfg.models.judge_provider),
+                        max_tokens=cfg.models.judge_max_tokens)
     raise ValueError(f"unknown judge {name}")
 
 
@@ -162,6 +164,17 @@ def execute(cfg: SystemConfig, args, overrides: dict[str, Any], questions: list[
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
     print(f"\n== run {rid} ({cfg.name}{' ' + args.baseline if args.baseline else ''}) -> {out_dir}")
     print(format_summary(summary))
+    health = judge.health() if hasattr(judge, "health") else None
+    if health:
+        summary["judge_health"] = health
+        (out_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
+        print(f"\nWARNING  {health}")
+    if summary["n_judged"] < summary["n"]:
+        print(f"WARNING  accuracy is over {summary['n_judged']}/{summary['n']} questions; the rest are unjudged.")
+    sub = getattr(getattr(judge, "llm", None), "substitutions", dict)()
+    if sub:
+        print(f"WARNING  the judge gateway served {sub} instead of {cfg.models.judge_model}; "
+              "runs graded by different models are not comparable.")
     return summary
 
 
@@ -193,6 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_dotenv()
     args = build_parser().parse_args(argv)
     questions = load_questions(args)
     if args.stats_only:

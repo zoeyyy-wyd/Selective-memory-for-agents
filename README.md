@@ -16,7 +16,7 @@ in section "Running the real experiments" have been done.
 ```bash
 conda env create -f environment.yml      # python 3.11, faiss-cpu, torch, sentence-transformers
 conda activate smem                      # (the env already has `pip install -e .[dev]` applied)
-pytest                                   # 66 tests, all offline, ~1 min
+pytest                                   # 85 tests, all offline, ~5 s
 ```
 
 Two backends exist for every model-dependent step so that the whole pipeline runs without a GPU or an
@@ -28,7 +28,7 @@ API key:
 | embeddings | feature-hashing `HashEmbedder` | `BAAI/bge-m3` via sentence-transformers, cached on disk |
 | consolidation summary | medoid episode | same local model, JSON schema |
 | entailment check | lexical overlap | `cross-encoder/nli-deberta-v3-base` |
-| answering | extractive stand-in | `gpt-4.1-mini` (any OpenAI-compatible model) |
+| answering | extractive stand-in | `gpt-4.1-mini`, or Claude via `configs/claude.yaml` |
 | judge | exact match | port of the official LongMemEval judge prompts |
 
 ## The worked example (plan section 01)
@@ -146,6 +146,34 @@ smem-eval --split dev --baseline naive_rag --read-budget 2000 --backend llm --ju
 Every run is keyed by a hash of (config, budgets, backend, split, baseline, overrides); rerunning
 reuses existing records, `--rerun` recomputes. Answers, injected ids, store statistics and judge labels
 are all in `records.jsonl`; `summary.json` has every aggregate with a bootstrap 95% CI.
+
+### Answering on Claude
+
+`configs/claude.yaml` moves **only** the answering model to Claude. Extraction, embeddings and the NLI
+check stay on the L4: Anthropic has no embedding endpoint, and Qwen3-8B extraction is already free.
+The judge stays on the OpenAI models on purpose — `evals/longmemeval/judge.py` is a port of the
+official `evaluate_qa.py`, and swapping the judge makes accuracy incomparable with published
+LongMemEval numbers. Claude is worth running as a *second* judge for an agreement check.
+
+```bash
+pip install -e ".[claude]"          # or: uv pip install -e ".[dev,claude]"
+export ANTHROPIC_API_KEY=...        # or put it in .env, or run `ant auth login`
+
+# step 3 of the build order: pick the answering model on 50 dev questions (~$0.60)
+for m in gpt-4.1-mini claude-sonnet-5 claude-haiku-4-5; do
+  smem-eval --split dev --config configs/claude.yaml --backend llm --judge llm \
+            --limit 50 --read-budget 2000 --ablate models.answer_model=$m
+done
+```
+
+`answer_provider: auto` sends `claude-*` names to the Anthropic SDK and everything else to the
+OpenAI-compatible client; a `base_url` always wins, so extraction stays pinned to vLLM. Three Claude
+behaviours the backend absorbs so the rest of the pipeline does not have to know about them:
+`temperature` is gone on Claude 4.6+ (rerun determinism comes from `DiskCache`, as before), structured
+output is `output_config.format`, and thinking is **off by default** — it is on by default on Sonnet 5
+and Opus 5, and its tokens come out of `max_tokens`, which would leave the judge's `max_tokens=10`
+call with no text at all. Thinking off is also the right experimental choice: a reader that reasons
+around a retrieval gap masks exactly the differences Figure 1 exists to show.
 
 ### Running the real experiments
 

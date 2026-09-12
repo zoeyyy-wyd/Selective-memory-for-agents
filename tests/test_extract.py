@@ -81,7 +81,24 @@ def test_out_of_vocabulary_attribute_is_kept_but_counted_as_violation():
     ex = LLMExtractor(ScriptedLLM([raw]), constrained_decoding=False)
     r = ex.extract(sess("hello"))
     assert not r.schema_ok and ex.n_schema_errors == 1
-    assert [(f.entity, f.attribute) for f in r.facts] == [("user", "num_restaurants")]  # "other" without a name is dropped
+    # "other" with no custom_attribute is kept under a key derived from the value, not dropped: on the
+    # dev split this path hit 69 sessions, and dropping cost a fact every time. Keying it on "other"
+    # itself would be worse -- a second such fact about one entity would read as a knowledge update.
+    assert [(f.entity, f.attribute) for f in r.facts] == [("user", "num_restaurants"), ("user", "x")]
+    assert ex.n_missing_custom_attr == 1
+
+
+def test_two_unnamed_other_facts_about_one_entity_do_not_collide():
+    raw = json.dumps({"episodes": [], "facts": [
+        {"turn_idx": 0, "entity": "writing_systems", "attribute": "other", "value": "represent spoken language",
+         "kind": "stated", "speaker": "user"},
+        {"turn_idx": 0, "entity": "writing_systems", "attribute": "other", "value": "syllabic and ideographic",
+         "kind": "stated", "speaker": "user"},
+    ]})
+    ex = LLMExtractor(ScriptedLLM([raw]), constrained_decoding=True)
+    r = ex.extract(sess("hello"))
+    keys = [(f.entity, f.attribute) for f in r.facts]
+    assert len(set(keys)) == 2, keys   # distinct keys => no bogus validity chain between them
 
 
 def test_key_drift_diagnostic_reports_but_does_not_merge():

@@ -1,0 +1,61 @@
+# Answering and judging through TokenRouter (https://api.tokenrouter.com/v1), an OpenAI-compatible
+# gateway. Nothing Anthropic-specific is involved even for Claude models: the gateway speaks the
+# OpenAI wire format, so `OpenAICompatLLM` handles it and `configs/claude.yaml` (Anthropic SDK) is
+# the alternative for talking to Anthropic directly.
+#
+#   put the TokenRouter key in OPENAI_API_KEY (in .env) -- it is the OpenAI-compatible client
+#   curl -s https://api.tokenrouter.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY"
+#       -> confirm the exact model ids before filling answer_model / judge_model below
+#
+# IMPORTANT, and the reason this config exists at all: a *router* may serve a request with a model
+# other than the one requested. Every ablation here assumes the answering model is held constant,
+# so a substitution is silent corruption of the comparison. Pin exact model ids -- never an "auto"
+# or "best" alias -- and check `substitutions()` on the client after a run; it counts responses
+# whose served model differed from the requested one.
+name: tokenrouter
+budget:
+  store_tokens: 1000000000   # overridden by --store-budget
+  read_tokens: 2000
+  consolidate_every: 5
+write:
+  policy: sieve
+  validity_chain: true
+  sieve_eps: 1.0
+  hysteresis_gamma: 0.1
+evict:
+  policy: swap
+  hawkes_alpha: 0.5
+  hawkes_beta: 0.03
+consolidation:
+  policy: redundancy
+read:
+  retrieval: two_hop
+  packing: budgeted_greedy
+  tau_abs: 0.3
+extract:
+  backend: llm
+  constrained_decoding: true
+  max_turn_tokens: 2000
+  cache_dir: .cache/extract
+models:
+  embedder: BAAI/bge-m3
+  # Extraction stays on the local L4 and is already cached; the gateway is not involved.
+  extract_model: Qwen/Qwen3-8B-AWQ
+  extract_base_url: http://localhost:8000/v1
+  # Exact gateway ids (verified with scripts/check_gateway.py). The plan's gpt-4.1-mini is NOT
+  # offered here; gpt-5-mini is the nearest small OpenAI model on the gateway.
+  answer_model: openai/gpt-5-mini
+  answer_base_url: https://api.tokenrouter.com/v1
+  answer_provider: openai
+  # The official LongMemEval judge is GPT-4o, which this gateway does not carry either. gpt-4o-mini
+  # is the closest available and is a non-reasoning model, which matters: the judge is called with
+  # max_tokens=10, and a reasoning model can spend that budget before emitting "yes"/"no".
+  # This is a DEVIATION from the official protocol -- see README.
+  judge_model: openai/gpt-4o-mini
+  judge_base_url: https://api.tokenrouter.com/v1
+  judge_provider: openai
+  nli_model: cross-encoder/nli-deberta-v3-base
+  llm_cache_dir: .cache/llm
+  schema_mode: response_format
+  extract_extra_body:
+    chat_template_kwargs: {enable_thinking: false}
