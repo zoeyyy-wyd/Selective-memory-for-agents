@@ -7,7 +7,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import re
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Protocol
@@ -60,6 +62,11 @@ class OpenAICompatLLM:
         constrained_decoding: bool = True,
         schema_mode: str = "response_format",
         extra_body: dict[str, Any] | None = None,
+        max_retries: int = 2,
+        timeout: float = 600.0,
+        retry_attempts: int = 5,
+        retry_base_delay: float = 2.0,
+        retry_max_delay: float = 60.0,
     ):
         from openai import OpenAI  # local import keeps the offline path free of network clients
 
@@ -75,7 +82,10 @@ class OpenAICompatLLM:
         key = api_key or os.environ.get("OPENAI_API_KEY") or ("EMPTY" if base_url else None)
         if key is None:
             raise RuntimeError("OPENAI_API_KEY is not set and no base_url was given")
-        self.client = OpenAI(base_url=base_url, api_key=key)
+        # A shared gateway 503s intermittently ('system disk overloaded' on TokenRouter). The SDK
+        # retries 5xx with backoff, and an eval run is long enough that giving up after the
+        # default 2 attempts loses hours of work to a blip.
+        self.client = OpenAI(base_url=base_url, api_key=key, max_retries=max_retries, timeout=timeout)
         self.cache = DiskCache(cache_dir) if cache_dir else None
         self.calls = 0
         self.prompt_tokens = 0
@@ -84,6 +94,10 @@ class OpenAICompatLLM:
         # ablation in this project assumes the answering model is held constant, so substitution is
         # silent corruption of the comparison, not a performance detail: count what actually served.
         self.served_models: Counter[str] = Counter()
+        self.retry_attempts = retry_attempts
+        self.retry_base_delay = retry_base_delay
+        self.retry_max_delay = retry_max_delay
+        self.n_retries = 0
 
     def _is_vllm(self) -> bool:
         """Self-hosted OpenAI-compatible server, i.e. one that takes vLLM's vendor fields. A hosted
@@ -113,6 +127,31 @@ class OpenAICompatLLM:
             kwargs["extra_body"] = extra_body
         return kwargs
 
+    def _create_with_retry(self, kwargs: dict[str, Any]):
+        """The SDK already retries 5xx, but its backoff tops out inside a minute. A shared gateway can
+        be down for far longer -- TokenRouter returned 'system disk overloaded' for several minutes at
+        a stretch -- and an eval run is thousands of calls, so one blip would otherwise throw away
+        hours. Retries only what can succeed on a second attempt: a 400 (bad model id, bad schema)
+        fails immediately, because waiting cannot fix it."""
+        from openai import APIConnectionError, APIStatusError, APITimeoutError, RateLimitError
+
+        delay = self.retry_base_delay
+        for attempt in range(self.retry_attempts):
+            try:
+                return self.client.chat.completions.create(**kwargs)
+            except (RateLimitError, APIConnectionError, APITimeoutError) as e:
+                last = e
+            except APIStatusError as e:
+                if e.status_code < 500:
+                    raise
+                last = e
+            self.n_retries += 1
+            if attempt == self.retry_attempts - 1:
+                raise last
+            time.sleep(min(delay, self.retry_max_delay) * (1.0 + 0.25 * random.random()))
+            delay *= 2
+        raise RuntimeError("unreachable")
+
     def complete(self, system, user, *, json_schema=None, temperature=0.0, max_tokens=1024) -> str:
         schema = json_schema if self.constrained_decoding else None
         cache_key = DiskCache.key(self.model, system, user, schema, temperature, max_tokens)
@@ -122,7 +161,7 @@ class OpenAICompatLLM:
                 return hit
 
         kwargs = self.request_kwargs(system, user, json_schema, temperature, max_tokens)
-        resp = self.client.chat.completions.create(**kwargs)
+        resp = self._create_with_retry(kwargs)
         text = resp.choices[0].message.content or ""
         self.calls += 1
         served = getattr(resp, "model", None) or self.model

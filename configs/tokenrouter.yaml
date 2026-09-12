@@ -42,20 +42,37 @@ models:
   # Extraction stays on the local L4 and is already cached; the gateway is not involved.
   extract_model: Qwen/Qwen3-8B-AWQ
   extract_base_url: http://localhost:8000/v1
-  # Exact gateway ids (verified with scripts/check_gateway.py). The plan's gpt-4.1-mini is NOT
-  # offered here; gpt-5-mini is the nearest small OpenAI model on the gateway.
-  answer_model: openai/gpt-5-mini
+  # Exact gateway ids, verified with scripts/check_gateway.py. The plan's gpt-4.1-mini is not
+  # offered here. Measured on this gateway with the judge prompt, output tokens for one "yes":
+  #
+  #   openai/gpt-4o-mini             2    openai/gpt-5-mini        EMPTY at max_tokens=10 (reasoning)
+  #   openai/gpt-5.6-luna            4    google/gemini-3.6-flash  EMPTY at 10, 138 tokens at 512
+  #   openai/gpt-5.4-mini            4
+  #   google/gemini-3.5-flash-lite   1
+  #   anthropic/claude-haiku-4.5     4
+  #   anthropic/claude-sonnet-5      5
+  #
+  # Reasoning models are wrong for BOTH roles here, not just the judge: for answering, a model that
+  # reasons its way around a gap in the injected memory masks the very differences Figure 1 exists
+  # to show, and bills reasoning tokens for the privilege. Settle answering with the bake-off
+  # (build order step 3) rather than by assumption; this is only the starting point.
+  answer_model: openai/gpt-4o-mini
   answer_base_url: https://api.tokenrouter.com/v1
   answer_provider: openai
-  # The official LongMemEval judge is GPT-4o, which this gateway does not carry either. gpt-4o-mini
-  # is the closest available and is a non-reasoning model, which matters: the judge is called with
-  # max_tokens=10, and a reasoning model can spend that budget before emitting "yes"/"no".
-  # This is a DEVIATION from the official protocol -- see README.
+  # The official LongMemEval judge is GPT-4o, which this gateway does not carry. gpt-4o-mini is the
+  # closest available and the cheapest of the usable set. This is a DEVIATION from the official
+  # protocol: it keeps every comparison BETWEEN configurations valid, because one judge grades them
+  # all, but it does not make absolute accuracy comparable with published LongMemEval numbers.
+  # For that, judge the final test run with real GPT-4o on a direct OpenAI key (~$1 for 400
+  # questions) and report the agreement rate between the two judges on a dev sample.
   judge_model: openai/gpt-4o-mini
   judge_base_url: https://api.tokenrouter.com/v1
   judge_provider: openai
   nli_model: cross-encoder/nli-deberta-v3-base
   llm_cache_dir: .cache/llm
+  request_max_retries: 6            # the gateway 503s intermittently ("system disk overloaded")
+  retry_attempts: 8                 # outages lasted minutes, so back off far longer than the SDK does
+  retry_max_delay: 90.0
   schema_mode: response_format
   extract_extra_body:
     chat_template_kwargs: {enable_thinking: false}

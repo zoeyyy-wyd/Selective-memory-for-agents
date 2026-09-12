@@ -196,7 +196,10 @@ def build_llm(model: str, base_url: str | None, cfg: SystemConfig, constrained: 
                             thinking=a.thinking, effort=a.effort, fallback_model=a.fallback_model,
                             max_retries=a.max_retries, timeout=a.timeout)
     return OpenAICompatLLM(model, base_url=base_url, cache_dir=cfg.models.llm_cache_dir, constrained_decoding=constrained,
-                           schema_mode=cfg.models.schema_mode, extra_body=extra_body)
+                           schema_mode=cfg.models.schema_mode, extra_body=extra_body,
+                           max_retries=cfg.models.request_max_retries, timeout=cfg.models.request_timeout,
+                           retry_attempts=cfg.models.retry_attempts, retry_base_delay=cfg.models.retry_base_delay,
+                           retry_max_delay=cfg.models.retry_max_delay)
 
 
 def build_system(cfg: SystemConfig, backend: str = "offline", store_path: str = ":memory:") -> SelectiveMemory:

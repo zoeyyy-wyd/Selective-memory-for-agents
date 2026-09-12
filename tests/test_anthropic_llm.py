@@ -147,3 +147,60 @@ def test_substitutions_reports_a_router_serving_a_different_model():
     llm.served_models.clear()
     llm.served_models.update({"gpt-4.1-mini": 50})
     assert llm.substitutions() == {}
+
+
+def test_gateway_503_is_retried_but_a_400_is_not():
+    """The gateway goes down for minutes at a time and a run is thousands of calls, so a blip must
+    not end it. A 400 (bad model id, bad schema) cannot be fixed by waiting and must fail at once."""
+    import httpx
+    from openai import APIStatusError
+
+    from smem.llm import OpenAICompatLLM
+
+    def err(status):
+        req = httpx.Request("POST", "https://api.tokenrouter.com/v1/chat/completions")
+        return APIStatusError("boom", response=httpx.Response(status, request=req), body=None)
+
+    llm = OpenAICompatLLM("m", base_url="https://api.tokenrouter.com/v1", api_key="k",
+                          retry_attempts=4, retry_base_delay=0.0, retry_max_delay=0.0)
+
+    calls = {"n": 0}
+
+    def flaky(**kw):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise err(503)
+        return "served"
+
+    llm.client.chat.completions.create = flaky
+    assert llm._create_with_retry({}) == "served"
+    assert calls["n"] == 3 and llm.n_retries == 2
+
+    def always_400(**kw):
+        calls["n"] += 1
+        raise err(400)
+
+    calls["n"], llm.n_retries = 0, 0
+    llm.client.chat.completions.create = always_400
+    with pytest.raises(APIStatusError):
+        llm._create_with_retry({})
+    assert calls["n"] == 1 and llm.n_retries == 0   # no waiting on an unfixable error
+
+
+def test_retry_gives_up_and_reraises_after_the_last_attempt():
+    import httpx
+    from openai import APIStatusError
+
+    from smem.llm import OpenAICompatLLM
+
+    llm = OpenAICompatLLM("m", base_url="https://x.example/v1", api_key="k",
+                          retry_attempts=3, retry_base_delay=0.0, retry_max_delay=0.0)
+
+    def down(**kw):
+        req = httpx.Request("POST", "https://x.example/v1/chat/completions")
+        raise APIStatusError("down", response=httpx.Response(503, request=req), body=None)
+
+    llm.client.chat.completions.create = down
+    with pytest.raises(APIStatusError):
+        llm._create_with_retry({})
+    assert llm.n_retries == 3

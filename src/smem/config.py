@@ -90,6 +90,11 @@ class ModelConfig(BaseModel):
     # The judge answers in a word, but a reasoning judge spends its budget before any text; 10 was
     # enough for gpt-4.1-mini and returns an empty string on gpt-5-mini. See LLMJudge.
     judge_max_tokens: int = 512
+    request_max_retries: int = 2      # raise behind a flaky gateway
+    request_timeout: float = 600.0
+    retry_attempts: int = 5           # on top of the SDK's own; total wait grows to ~2 min
+    retry_base_delay: float = 2.0
+    retry_max_delay: float = 60.0
     nli_model: str = "lexical"          # "lexical" (offline) or a HF cross-encoder, e.g. cross-encoder/nli-deberta-v3-base
     llm_cache_dir: str = ".cache/llm"
     embed_cache_dir: str = ".cache/embed"

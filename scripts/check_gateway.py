@@ -64,7 +64,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.live:
         llm = build_llm(cfg.models.answer_model, cfg.models.answer_base_url, cfg,
                         provider=cfg.models.answer_provider)
-        out = llm.complete("Answer with one word.", "What is the capital of France?", max_tokens=10)
+        try:
+            out = llm.complete("Answer with one word.", "What is the capital of France?", max_tokens=10)
+        except Exception as e:                                    # noqa: BLE001 - report, don't raise
+            print(f"FAIL  live call: {type(e).__name__}: {str(e)[:160]}")
+            print("      A 503 here is the gateway, not the config. It has been intermittent; retry, "
+                  "and raise models.request_max_retries before a long run.")
+            return 1
+        if not out.strip():
+            print(f"FAIL  live call returned an EMPTY string at max_tokens=10. {cfg.models.answer_model} "
+                  "is most likely a reasoning model that spent the budget before emitting text.")
+            return 1
         print(f"ok    live call returned {out.strip()[:40]!r}")
         served = getattr(llm, "served_models", None)
         if served:
