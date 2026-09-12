@@ -35,7 +35,7 @@ models:
   extract_model: Qwen/Qwen3-8B-AWQ
   extract_base_url: http://localhost:8000/v1
   answer_model: gpt-4.1-mini
-  judge_model: gpt-4.1-mini
+  judge_model: gpt-4o                # official LongMemEval judge, dev and test alike; direct api.openai.com
   nli_model: cross-encoder/nli-deberta-v3-base
   llm_cache_dir: .cache/llm
   schema_mode: response_format          # OpenAI-style json_schema; vLLM routes it to xgrammar

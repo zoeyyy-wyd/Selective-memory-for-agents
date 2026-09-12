@@ -179,6 +179,7 @@ class OpenAICompatLLM:
         `openai/gpt-5-mini` is served by `gpt-5-mini-2025-08-07`. Same model, so normalise both away
         before comparing; anything still different is a real reroute."""
         name = name.split("/")[-1].lower()
+        name = re.sub(r"[-:]free$", "", name)   # billing tier, not a model: z-ai/glm-5.3-free is served as glm-5.3
         return re.sub(r"[-@]?\d{4}[-_]?\d{2}[-_]?\d{2}$", "", name).rstrip("-@")
 
     def substitutions(self) -> dict[str, int]:

@@ -46,7 +46,7 @@ models:
   extract_base_url: http://localhost:8000/v1
   answer_model: claude-sonnet-5
   answer_provider: anthropic
-  judge_model: gpt-4.1-mini
+  judge_model: gpt-4o                # official LongMemEval judge, dev and test alike; direct api.openai.com
   judge_provider: openai
   nli_model: cross-encoder/nli-deberta-v3-base
   llm_cache_dir: .cache/llm

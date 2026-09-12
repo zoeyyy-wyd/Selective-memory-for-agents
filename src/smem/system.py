@@ -4,6 +4,7 @@ the evidence metrics need: where every candidate came from and what happened to 
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -172,6 +173,13 @@ class SelectiveMemory:
         self.store.close()
 
 
+def extract_extra_body(cfg: SystemConfig) -> dict:
+    body = dict(cfg.models.extract_extra_body)
+    if cfg.extract.repetition_penalty != 1.0:
+        body["repetition_penalty"] = cfg.extract.repetition_penalty
+    return body
+
+
 def resolve_provider(model: str, base_url: str | None, setting: str = "auto") -> str:
     """A base_url always means a self-hosted OpenAI-compatible server (vLLM, llama.cpp), so it wins
     over the model name; otherwise claude-* goes to the Anthropic SDK. Never an OpenAI-compatible
@@ -184,7 +192,8 @@ def resolve_provider(model: str, base_url: str | None, setting: str = "auto") ->
 
 
 def build_llm(model: str, base_url: str | None, cfg: SystemConfig, constrained: bool = True,
-              provider: str = "auto", extra_body: dict | None = None) -> LLM:
+              provider: str = "auto", extra_body: dict | None = None,
+              api_key_env: str = "OPENAI_API_KEY") -> LLM:
     """`extra_body` is vendor-specific and must be passed only by the caller that owns the server it
     is meant for -- it used to be sent to every client, which was harmless only as long as answering
     went to api.openai.com. Behind an OpenAI-compatible gateway (TokenRouter, LiteLLM, ...) the
@@ -195,8 +204,11 @@ def build_llm(model: str, base_url: str | None, cfg: SystemConfig, constrained: 
         return AnthropicLLM(model, cache_dir=cfg.models.llm_cache_dir, constrained_decoding=constrained,
                             thinking=a.thinking, effort=a.effort, fallback_model=a.fallback_model,
                             max_retries=a.max_retries, timeout=a.timeout)
-    return OpenAICompatLLM(model, base_url=base_url, cache_dir=cfg.models.llm_cache_dir, constrained_decoding=constrained,
-                           schema_mode=cfg.models.schema_mode, extra_body=extra_body,
+    api_key = os.environ.get(api_key_env)
+    if not api_key and not base_url:
+        raise RuntimeError(f"{api_key_env} is not set and {model} has no base_url; put the key in .env")
+    return OpenAICompatLLM(model, base_url=base_url, api_key=api_key, cache_dir=cfg.models.llm_cache_dir,
+                           constrained_decoding=constrained, schema_mode=cfg.models.schema_mode, extra_body=extra_body,
                            max_retries=cfg.models.request_max_retries, timeout=cfg.models.request_timeout,
                            retry_attempts=cfg.models.retry_attempts, retry_base_delay=cfg.models.retry_base_delay,
                            retry_max_delay=cfg.models.retry_max_delay)
@@ -209,15 +221,16 @@ def build_system(cfg: SystemConfig, backend: str = "offline", store_path: str = 
         return SelectiveMemory(cfg, store_path=store_path)
     constrained = cfg.extract.constrained_decoding
     extract_llm = build_llm(cfg.models.extract_model, cfg.models.extract_base_url, cfg, constrained,
-                            extra_body=cfg.models.extract_extra_body)
+                            extra_body=extract_extra_body(cfg))
     answer_llm = build_llm(cfg.models.answer_model, cfg.models.answer_base_url, cfg,
-                           provider=cfg.models.answer_provider)
+                           provider=cfg.models.answer_provider, api_key_env=cfg.models.answer_api_key_env)
     return SelectiveMemory(
         cfg,
         extractor=LLMExtractor(extract_llm, cfg.extract.cache_dir, constrained, cfg.extract.max_episode_tokens,
                                max_turn_tokens=cfg.extract.max_turn_tokens,
-                               max_output_tokens=cfg.extract.max_output_tokens),
-        answerer=LLMAnswerer(answer_llm),
+                               max_output_tokens=cfg.extract.max_output_tokens,
+                               loop_retry_temperature=cfg.extract.loop_retry_temperature),
+        answerer=LLMAnswerer(answer_llm, max_tokens=cfg.models.answer_max_tokens),
         summarizer=LLMSummarizer(extract_llm, constrained),
         rewriter=extract_llm,
         store_path=store_path,

@@ -51,15 +51,16 @@ class Answerer(Protocol):
 
 
 class LLMAnswerer:
-    def __init__(self, llm: LLM):
+    def __init__(self, llm: LLM, max_tokens: int = 300):
         self.llm = llm
+        self.max_tokens = max_tokens
 
     def answer(self, question: str, result: ReadResult, now: datetime) -> str:
         if result.abstain or not result.packed:
             return ABSTAIN_TEXT
         user = (f"Current date: {now.strftime('%Y-%m-%d')}\n\nMemory entries:\n{format_context(result.packed)}\n\n"
                 f"Question: {question}")
-        return self.llm.complete(ANSWER_SYSTEM, user, max_tokens=300).strip()
+        return self.llm.complete(ANSWER_SYSTEM, user, max_tokens=self.max_tokens).strip()
 
 
 class ExtractiveAnswerer:

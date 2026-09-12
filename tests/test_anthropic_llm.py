@@ -116,19 +116,21 @@ def test_gateway_base_url_keeps_claude_models_on_the_openai_wire_format():
     assert resolve_provider("gpt-4.1-mini", "https://api.tokenrouter.com/v1") == "openai"
 
 
-def test_vendor_extra_body_never_reaches_the_answer_or_judge_client():
+def test_vendor_extra_body_never_reaches_the_answer_or_judge_client(monkeypatch):
     """Regression: extract_extra_body used to go to every client. That was invisible while answering
     went to api.openai.com (dropped there), but a gateway has a base_url, so Qwen3's
     chat_template_kwargs would have been forwarded to a router fronting GPT or Claude."""
     from smem.system import build_llm
 
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")        # the direct judge needs one
+    monkeypatch.setenv("TOKENROUTER_API_KEY", "tr-test")
     cfg = SystemConfig.load("configs/tokenrouter.yaml")
     assert cfg.models.extract_extra_body  # the config really does set one
 
     answer = build_llm(cfg.models.answer_model, cfg.models.answer_base_url, cfg,
                        provider=cfg.models.answer_provider)
     judge = build_llm(cfg.models.judge_model, cfg.models.judge_base_url, cfg,
-                      provider=cfg.models.judge_provider)
+                      provider=cfg.models.judge_provider, api_key_env=cfg.models.judge_api_key_env)
     for llm in (answer, judge):
         assert llm.extra_body == {}
         assert "extra_body" not in llm.request_kwargs("s", "u", None, 0.0, 100)
@@ -147,6 +149,10 @@ def test_substitutions_reports_a_router_serving_a_different_model():
     llm.served_models.clear()
     llm.served_models.update({"gpt-4.1-mini": 50})
     assert llm.substitutions() == {}
+    # a free billing tier reports the underlying model name; that is not a reroute
+    llm2 = OpenAICompatLLM("z-ai/glm-5.3-free", base_url="https://api.tokenrouter.com/v1", api_key="k")
+    llm2.served_models.update({"glm-5.3": 5})
+    assert llm2.substitutions() == {}
 
 
 def test_gateway_503_is_retried_but_a_400_is_not():
@@ -204,3 +210,15 @@ def test_retry_gives_up_and_reraises_after_the_last_attempt():
     with pytest.raises(APIStatusError):
         llm._create_with_retry({})
     assert llm.n_retries == 3
+
+
+def test_missing_key_names_the_variable(monkeypatch):
+    from smem.system import build_llm
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = SystemConfig.load("configs/default.yaml")
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY is not set"):
+        build_llm("gpt-4o", None, cfg)
+    monkeypatch.delenv("TOKENROUTER_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="TOKENROUTER_API_KEY"):
+        build_llm("gpt-4o", None, cfg, api_key_env="TOKENROUTER_API_KEY")

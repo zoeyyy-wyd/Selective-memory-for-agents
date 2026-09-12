@@ -17,6 +17,7 @@ class OracleBaseline:
 
     def answer_question(self, q: LMEQuestion) -> BaselineOutput:
         context = render_turns(q, q.evidence_session_ids, only_evidence_turns=not self.whole_sessions)
-        answer = answer_from_context(self.llm, q.question, context, q.question_date)
+        answer = answer_from_context(self.llm, q.question, context, q.question_date,
+                                     max_tokens=getattr(self, "answer_max_tokens", 300))
         return BaselineOutput(answer, count_tokens(context), len(context.splitlines()), context,
                               {"evidence_sessions": sorted(q.evidence_session_ids)})

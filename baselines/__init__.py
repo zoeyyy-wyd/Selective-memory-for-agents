@@ -29,7 +29,8 @@ class Baseline(Protocol):
     def answer_question(self, q: LMEQuestion) -> BaselineOutput: ...
 
 
-def answer_from_context(llm: LLM | None, question: str, context: str, now: datetime) -> str:
+def answer_from_context(llm: LLM | None, question: str, context: str, now: datetime,
+                        max_tokens: int = 300) -> str:
     """LLM answer over a plain-text context; offline, the line sharing the most terms with the question."""
     if not context.strip():
         return ABSTAIN_TEXT
@@ -38,7 +39,7 @@ def answer_from_context(llm: LLM | None, question: str, context: str, now: datet
         best = max(context.splitlines(), key=lambda line: len(q_terms & set(tokenize(line))), default="")
         return best.strip() or ABSTAIN_TEXT
     user = f"Current date: {now.strftime('%Y-%m-%d')}\n\nMemory entries:\n{context}\n\nQuestion: {question}"
-    return llm.complete(ANSWER_SYSTEM, user, max_tokens=300).strip()
+    return llm.complete(ANSWER_SYSTEM, user, max_tokens=max_tokens).strip()
 
 
 def render_turns(q: LMEQuestion, session_filter: set[str] | None = None, only_evidence_turns: bool = False) -> str:
@@ -57,24 +58,33 @@ def build_baseline(name: str, cfg: SystemConfig, backend: str) -> Baseline:
     from smem.system import build_llm
 
     llm = (None if backend == "offline" else
-           build_llm(cfg.models.answer_model, cfg.models.answer_base_url, cfg, provider=cfg.models.answer_provider))
+           build_llm(cfg.models.answer_model, cfg.models.answer_base_url, cfg, provider=cfg.models.answer_provider,
+                     api_key_env=cfg.models.answer_api_key_env))
     if name == "oracle":
         from baselines.oracle import OracleBaseline
 
-        return OracleBaseline(llm)
+        b = OracleBaseline(llm)
+        b.answer_max_tokens = cfg.models.answer_max_tokens
+        return b
     if name == "full_context":
         from baselines.full_context import FullContextBaseline
 
-        return FullContextBaseline(llm)
+        b = FullContextBaseline(llm)
+        b.answer_max_tokens = cfg.models.answer_max_tokens
+        return b
     if name == "naive_rag":
         from baselines.naive_rag import NaiveRAGBaseline
         from smem.embed import get_embedder
 
-        return NaiveRAGBaseline(llm, get_embedder(cfg.models.embedder, cfg.models.embed_dim), cfg.budget.read_tokens)
+        b = NaiveRAGBaseline(llm, get_embedder(cfg.models.embedder, cfg.models.embed_dim), cfg.budget.read_tokens)
+        b.answer_max_tokens = cfg.models.answer_max_tokens
+        return b
     if name == "mem0_oss":
         from baselines.mem0_oss import Mem0Baseline
 
-        return Mem0Baseline(llm, cfg)
+        b = Mem0Baseline(llm, cfg)
+        b.answer_max_tokens = cfg.models.answer_max_tokens
+        return b
     raise ValueError(f"unknown baseline {name}")
 
 

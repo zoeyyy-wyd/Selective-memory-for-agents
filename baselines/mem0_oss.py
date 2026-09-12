@@ -61,5 +61,6 @@ class Mem0Baseline:
             lines.append(line)
             used += cost
         context = "\n".join(lines)
-        answer = answer_from_context(self.llm, q.question, context, q.question_date)
+        answer = answer_from_context(self.llm, q.question, context, q.question_date,
+                                     max_tokens=getattr(self, "answer_max_tokens", 300))
         return BaselineOutput(answer, used, len(lines), context, {"mem0_add_calls": n_add_calls})

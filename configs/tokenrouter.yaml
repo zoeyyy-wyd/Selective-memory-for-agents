@@ -1,10 +1,12 @@
+# Answering through the TokenRouter gateway (z-ai/glm-5.3-free, $0 per token); the judge goes
+# direct to OpenAI (gpt-4o) like every other config. Two keys: TOKENROUTER_API_KEY, OPENAI_API_KEY.
 # Answering and judging through TokenRouter (https://api.tokenrouter.com/v1), an OpenAI-compatible
 # gateway. Nothing Anthropic-specific is involved even for Claude models: the gateway speaks the
 # OpenAI wire format, so `OpenAICompatLLM` handles it and `configs/claude.yaml` (Anthropic SDK) is
 # the alternative for talking to Anthropic directly.
 #
-#   put the TokenRouter key in OPENAI_API_KEY (in .env) -- it is the OpenAI-compatible client
-#   curl -s https://api.tokenrouter.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY"
+#   put the TokenRouter key in TOKENROUTER_API_KEY (in .env); OPENAI_API_KEY is for the judge
+#   curl -s https://api.tokenrouter.com/v1/models -H "Authorization: Bearer $TOKENROUTER_API_KEY"
 #       -> confirm the exact model ids before filling answer_model / judge_model below
 #
 # IMPORTANT, and the reason this config exists at all: a *router* may serve a request with a model
@@ -56,18 +58,20 @@ models:
   # reasons its way around a gap in the injected memory masks the very differences Figure 1 exists
   # to show, and bills reasoning tokens for the privilege. Settle answering with the bake-off
   # (build order step 3) rather than by assumption; this is only the starting point.
-  answer_model: openai/gpt-4o-mini
+  answer_model: z-ai/glm-5.3-free
+  answer_max_tokens: 2048           # reasoning model: ~500 tokens of thinking before the answer
   answer_base_url: https://api.tokenrouter.com/v1
   answer_provider: openai
-  # The official LongMemEval judge is GPT-4o, which this gateway does not carry. gpt-4o-mini is the
-  # closest available and the cheapest of the usable set. This is a DEVIATION from the official
-  # protocol: it keeps every comparison BETWEEN configurations valid, because one judge grades them
-  # all, but it does not make absolute accuracy comparable with published LongMemEval numbers.
-  # For that, judge the final test run with real GPT-4o on a direct OpenAI key (~$1 for 400
-  # questions) and report the agreement rate between the two judges on a dev sample.
-  judge_model: openai/gpt-4o-mini
-  judge_base_url: https://api.tokenrouter.com/v1
+  answer_api_key_env: TOKENROUTER_API_KEY
+  # Judge: real GPT-4o, direct to api.openai.com, as in the official LongMemEval evaluate_qa.py.
+  # It is not on the gateway, so this needs a real OpenAI key in OPENAI_API_KEY -- separate from the
+  # gateway key, which lives in TOKENROUTER_API_KEY. Keeps absolute accuracy comparable with
+  # published numbers. (~$2.50/M input at time of writing -- check; ~0.75M tokens for the bake-off
+  # and stress test, ~8M for the full campaign.)
+  judge_model: gpt-4o
+  judge_base_url: null
   judge_provider: openai
+  judge_api_key_env: OPENAI_API_KEY
   nli_model: cross-encoder/nli-deberta-v3-base
   llm_cache_dir: .cache/llm
   request_max_retries: 6            # the gateway 503s intermittently ("system disk overloaded")

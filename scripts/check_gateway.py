@@ -21,18 +21,20 @@ from smem.system import build_llm, resolve_provider
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", default="configs/tokenrouter.yaml")
+    p.add_argument("--config", default="configs/default.yaml")
     p.add_argument("--live", action="store_true", help="also make one real call (costs a few tokens)")
     args = p.parse_args(argv)
 
     load_dotenv()
     cfg = SystemConfig.load(args.config)
 
-    key = os.environ.get("OPENAI_API_KEY", "")
-    if not key:
-        print("FAIL  OPENAI_API_KEY is empty. Paste the gateway key into that line in .env.")
-        return 1
-    print(f"ok    key loaded ({key[:6]}...{key[-4:]}, {len(key)} chars)")
+    for role, env in (("answer", cfg.models.answer_api_key_env), ("judge", cfg.models.judge_api_key_env)):
+        key = os.environ.get(env, "")
+        if not key:
+            print(f"FAIL  {env} is empty ({role} reads it). Paste the key into that line in .env.")
+            return 1
+        print(f"ok    {role} key {env} loaded ({key[:6]}...{key[-4:]}, {len(key)} chars)")
+    key = os.environ.get(cfg.models.answer_api_key_env, "")
 
     for role, model, base_url, provider in [
         ("answer", cfg.models.answer_model, cfg.models.answer_base_url, cfg.models.answer_provider),

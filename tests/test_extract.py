@@ -117,3 +117,46 @@ def test_key_drift_diagnostic_reports_but_does_not_merge():
     assert d["suspicious_attribute_pairs"] == [("user", "current_location", "location")]
     assert d["suspicious_entity_pairs"] == [("rachel", "rachel_colleague")]
     assert d["n_entities"] == 3 and d["n_keys"] == 5
+
+
+def test_degenerate_greedy_output_triggers_one_sampled_retry_and_caches_it(tmp_path):
+    from smem.extract import looks_degenerate
+
+    loop = json.dumps({"episodes": [], "facts": [
+        {"turn_idx": 0, "entity": "user", "attribute": "location", "value": "living_room", "kind": "stated", "speaker": "user"}
+    ] * 8})
+    good = json.dumps({"episodes": [], "facts": [
+        {"turn_idx": 0, "entity": "user", "attribute": "location", "value": "Boston", "kind": "stated", "speaker": "user"}]})
+    assert looks_degenerate(loop, json.loads(loop)) and not looks_degenerate(good, json.loads(good))
+    assert looks_degenerate('{"episodes": [], "facts": [{"turn_idx": 0, "en', None)   # cut mid-item
+
+    llm = ScriptedLLM([loop, good])
+    ex = LLMExtractor(llm, cache_dir=tmp_path, loop_retry_temperature=0.6)
+    r = ex.extract(sess("hello"))
+    assert ex.n_looped == 1 and ex.n_loop_fixed == 1 and ex.n_calls == 2
+    assert [f.value for f in r.facts] == ["Boston"] and r.schema_ok
+    # the retry replaced the degenerate output in the cache: a second extract is a clean hit
+    ex2 = LLMExtractor(ScriptedLLM([]), cache_dir=tmp_path, loop_retry_temperature=0.6)
+    assert [f.value for f in ex2.extract(sess("hello")).facts] == ["Boston"] and ex2.n_calls == 0
+
+
+def test_retry_that_also_loops_keeps_the_original_and_is_counted():
+    loop = json.dumps({"episodes": [], "facts": [
+        {"turn_idx": 0, "entity": "user", "attribute": "location", "value": "x", "kind": "stated", "speaker": "user"}] * 6})
+    ex = LLMExtractor(ScriptedLLM([loop, loop]), loop_retry_temperature=0.6)
+    ex.extract(sess("hello"))
+    assert ex.n_looped == 1 and ex.n_loop_fixed == 0 and ex.n_calls == 2
+
+
+def test_salvage_recovers_the_complete_prefix_of_a_truncated_body():
+    from smem.extract import salvage_truncated_json
+
+    cut_in_facts = ('{"episodes": [{"turn_idx": 0, "speaker": "user", "text": "moved"}], "facts": ['
+                    '{"turn_idx": 0, "entity": "user", "attribute": "location", "value": "Boston", "kind": "stated"}, '
+                    '{"turn_idx": 1, "entity": "us')
+    o = salvage_truncated_json(cut_in_facts)
+    assert o and len(o["episodes"]) == 1 and [f["value"] for f in o["facts"]] == ["Boston"]
+    cut_in_episodes = '{"episodes": [{"turn_idx": 0, "speaker": "user", "text": "moved"}, {"turn_idx": 1, "sp'
+    o = salvage_truncated_json(cut_in_episodes)
+    assert o and len(o["episodes"]) == 1 and o["facts"] == []
+    assert salvage_truncated_json("garbage") is None

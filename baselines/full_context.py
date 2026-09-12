@@ -16,5 +16,6 @@ class FullContextBaseline:
 
     def answer_question(self, q: LMEQuestion) -> BaselineOutput:
         context = render_turns(q)
-        answer = answer_from_context(self.llm, q.question, context, q.question_date)
+        answer = answer_from_context(self.llm, q.question, context, q.question_date,
+                                     max_tokens=getattr(self, "answer_max_tokens", 300))
         return BaselineOutput(answer, count_tokens(context), len(context.splitlines()), context)

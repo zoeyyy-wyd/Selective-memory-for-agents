@@ -70,7 +70,7 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "episodes": {
-            "type": "array",
+            "type": "array", "maxItems": 40,
             "items": {
                 "type": "object",
                 "properties": {
@@ -84,7 +84,7 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
             },
         },
         "facts": {
-            "type": "array",
+            "type": "array", "maxItems": 60,
             "items": {
                 "type": "object",
                 "properties": {
@@ -258,12 +258,13 @@ class HeuristicExtractor:
 class LLMExtractor:
     def __init__(self, llm: LLM, cache_dir: str | Path | None = None, constrained_decoding: bool = True,
                  max_episode_tokens: int = 60, max_turn_tokens: int = 2000,
-                 max_output_tokens: int = 4096):
+                 max_output_tokens: int = 4096, loop_retry_temperature: float = 0.6):
         self.llm = llm
         self.constrained_decoding = constrained_decoding
         self.max_episode_tokens = max_episode_tokens
         self.max_turn_tokens = max_turn_tokens
         self.max_output_tokens = max_output_tokens
+        self.loop_retry_temperature = loop_retry_temperature
         self.cache = DiskCache(cache_dir) if cache_dir else None
         self.fallback = HeuristicExtractor(max_episode_tokens)
         self.n_calls = 0
@@ -272,22 +273,39 @@ class LLMExtractor:
         # counted apart so the headline error rate means 'output we could not use'.
         self.n_missing_custom_attr = 0
         self.n_truncated = 0
+        self.n_looped = 0          # greedy output was degenerate
+        self.n_loop_fixed = 0      # ...and the sampled retry was not
 
     def extract(self, session: Session) -> ExtractionResult:
         key = DiskCache.key("extract", PROMPT_VERSION, self.llm.model, self.constrained_decoding,
                             self.max_turn_tokens, session.session_id, session.content_hash())
+        system = SYSTEM_PROMPT.format(date=session.ts.strftime("%Y-%m-%d"),
+                                      attributes=", ".join(f'"{k}" ({v})' for k, v in CANONICAL_ATTRIBUTES.items()))
+        user = _render_session(session, self.max_turn_tokens)
+        schema = EXTRACTION_SCHEMA if self.constrained_decoding else None
+
         raw = self.cache.get(key) if self.cache else None
         if raw is None:
-            raw = self.llm.complete(
-                SYSTEM_PROMPT.format(date=session.ts.strftime("%Y-%m-%d"),
-                                     attributes=", ".join(f'"{k}" ({v})' for k, v in CANONICAL_ATTRIBUTES.items())),
-                _render_session(session, self.max_turn_tokens),
-                json_schema=EXTRACTION_SCHEMA if self.constrained_decoding else None,
-                max_tokens=self.max_output_tokens,
-            )
+            raw = self.llm.complete(system, user, json_schema=schema, max_tokens=self.max_output_tokens)
             self.n_calls += 1
             if self.cache:
                 self.cache.put(key, raw)
+        # Greedy decoding is deterministic, which is what the cache relies on, but it also has
+        # repetition attractors: 81 of 105 bad dev outputs were one value repeated to the cap.
+        # A little temperature escapes them (0.3 did not, 0.6 did). Retry once, sampled, and cache
+        # the retry in place of the degenerate greedy output -- the cache key stays the same, the
+        # meta says which path produced it. Extraction is preprocessing shared by every ablation,
+        # so a different sampler on 2% of sessions moves no comparison; it is still recorded.
+        if self.loop_retry_temperature > 0 and looks_degenerate(raw, parse_json_object(raw)):
+            self.n_looped += 1
+            retry = self.llm.complete(system, user, json_schema=schema, max_tokens=self.max_output_tokens,
+                                      temperature=self.loop_retry_temperature)
+            self.n_calls += 1
+            if not looks_degenerate(retry, parse_json_object(retry)):
+                self.n_loop_fixed += 1
+                raw = retry
+                if self.cache:
+                    self.cache.put(key, raw, {"retry_temperature": self.loop_retry_temperature})
         result = self.parse(session, raw)
         if not result.schema_ok:
             self.n_schema_errors += 1
@@ -295,17 +313,22 @@ class LLMExtractor:
 
     def parse(self, session: Session, raw: str) -> ExtractionResult:
         obj = parse_json_object(raw)
+        truncated = obj is None and not raw.rstrip().endswith(("}", "]"))
+        if truncated:
+            # A body that does not close its own JSON hit the output cap -- on dev, 81 of 105 such
+            # cases were the model repeating one value until the cap. Everything before the cut is
+            # still well-formed under the grammar, so salvage it: a session that looped after
+            # extracting 20 good facts should keep those 20, not fall back to the heuristic
+            # extractor. Still counted as a schema error; salvage improves the data, not the stat.
+            self.n_truncated += 1
+            obj = salvage_truncated_json(raw)
         if obj is None or not isinstance(obj.get("episodes"), list) or not isinstance(obj.get("facts"), list):
-            # An unparseable body that does not close its own JSON is a hit on the output cap, not a
-            # constrained-decoding failure; the distinction decides whether to raise the cap or the prompt.
-            if obj is None and not raw.rstrip().endswith(("}", "]")):
-                self.n_truncated += 1
             fb = self.fallback.extract(session)
             return ExtractionResult(session_id=session.session_id, episodes=fb.episodes, facts=fb.facts,
                                     schema_ok=False, raw=raw)
+        ok = not truncated
         episodes: list[Episode] = []
         facts: list[Fact] = []
-        ok = True
         n_turns = len(session.turns)
         for item in obj["episodes"]:
             try:
@@ -373,6 +396,43 @@ class LLMExtractor:
             except (KeyError, ValueError, TypeError):
                 ok = False
         return ExtractionResult(session_id=session.session_id, episodes=episodes, facts=facts, schema_ok=ok, raw=raw)
+
+
+def looks_degenerate(raw: str, obj: dict[str, Any] | None, min_repeat: int = 5) -> bool:
+    """A greedy decode that fell into a repetition attractor: either it ran to the cap without
+    closing its JSON, or it closed (maxItems forces that) with one value repeated over and over.
+    Clean dev outputs never repeat a value 5 times -- a count updated five times is five values."""
+    if obj is None:
+        return not raw.rstrip().endswith(("}", "]"))
+    vals = [str(f.get("value", "")) for f in obj.get("facts", []) if isinstance(f, dict)]
+    vals += [str(e.get("text", "")) for e in obj.get("episodes", []) if isinstance(e, dict)]
+    counts: dict[str, int] = {}
+    for v in vals:
+        counts[v] = counts.get(v, 0) + 1
+    return bool(counts) and max(counts.values()) >= min_repeat
+
+
+def salvage_truncated_json(raw: str) -> dict[str, Any] | None:
+    """Recover the complete prefix of an extraction body cut mid-item. Cut back to the last item
+    boundary and close whatever is open; both arrays are top-level and the grammar guarantees every
+    item before the cut is complete, so a handful of closers covers the cases."""
+    cut = raw.rfind("},")
+    if cut == -1:
+        cut = raw.rfind("}")
+    if cut == -1:
+        return None
+    head = raw[: cut + 1]
+    in_facts = '"facts"' in head
+    for closer in ("]}", "]}}", '], "facts": []}', '], "facts": []}}'):
+        if in_facts and "facts" in closer:
+            continue
+        try:
+            obj = json.loads(head + closer)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("episodes"), list) and isinstance(obj.get("facts"), list):
+            return obj
+    return None
 
 
 def _attr_from_value(value: str, max_words: int = 3) -> str:

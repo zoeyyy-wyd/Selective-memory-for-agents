@@ -75,6 +75,11 @@ class ExtractConfig(BaseModel):
     # temperature 0 an output that finished on its own is byte-identical under a larger cap,
     # so only the truncated entries are stale and the rest stay valid.
     max_output_tokens: int = 4096
+    # Off by default: unlike maxItems it alters sampling for every session, so switching it on
+    # invalidates the whole extraction cache. Only reach for it if loops survive maxItems.
+    repetition_penalty: float = 1.0
+    # Sampled retry when greedy output is degenerate (see LLMExtractor.extract). 0 disables.
+    loop_retry_temperature: float = 0.6
     cache_dir: str = ".cache/extract"
 
 
@@ -90,6 +95,9 @@ class ModelConfig(BaseModel):
     # The judge answers in a word, but a reasoning judge spends its budget before any text; 10 was
     # enough for gpt-4.1-mini and returns an empty string on gpt-5-mini. See LLMJudge.
     judge_max_tokens: int = 512
+    # The answer is one or two sentences, but a reasoning answerer spends its budget thinking first:
+    # glm-5.3 used ~500 tokens on a temporal question and would return "" at the old 300.
+    answer_max_tokens: int = 300
     request_max_retries: int = 2      # raise behind a flaky gateway
     request_timeout: float = 600.0
     retry_attempts: int = 5           # on top of the SDK's own; total wait grows to ~2 min
@@ -103,6 +111,11 @@ class ModelConfig(BaseModel):
     # client. Extraction is deliberately not routed here: it stays on the local vLLM server.
     answer_provider: ProviderName = "auto"
     judge_provider: ProviderName = "auto"
+    # Name of the env var holding each role's key. Two OpenAI-format clients can need two keys:
+    # answering through a gateway (TOKENROUTER_API_KEY) while the judge goes to api.openai.com
+    # directly (OPENAI_API_KEY) because the official LongMemEval judge, GPT-4o, is not on the gateway.
+    answer_api_key_env: str = "OPENAI_API_KEY"
+    judge_api_key_env: str = "OPENAI_API_KEY"
     # sent only to self-hosted servers (vLLM / llama.cpp); e.g. switch off Qwen3 thinking
     extract_extra_body: dict[str, Any] = Field(default_factory=dict)
 

@@ -89,7 +89,7 @@ def build_judge(name: str, cfg: SystemConfig) -> Judge:
         return ExactMatchJudge()
     if name == "llm":
         return LLMJudge(build_llm(cfg.models.judge_model, cfg.models.judge_base_url, cfg,
-                                  provider=cfg.models.judge_provider),
+                                  provider=cfg.models.judge_provider, api_key_env=cfg.models.judge_api_key_env),
                         max_tokens=cfg.models.judge_max_tokens)
     raise ValueError(f"unknown judge {name}")
 
