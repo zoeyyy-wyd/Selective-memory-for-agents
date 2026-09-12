@@ -121,10 +121,12 @@ class LexicalNLI:
 
 
 class CrossEncoderNLI:
-    def __init__(self, model_name: str = "cross-encoder/nli-deberta-v3-base"):
+    def __init__(self, model_name: str = "cross-encoder/nli-deberta-v3-base", device: str | None = None):
         from transformers import pipeline  # heavy import kept local
 
-        self.pipe = pipeline("text-classification", model=model_name, top_k=None)
+        # device=None lets transformers pick (cuda if present); "cpu" when vLLM owns the card
+        self.pipe = pipeline("text-classification", model=model_name, top_k=None,
+                             **({"device": device} if device else {}))
 
     def entails(self, premise: str, hypothesis: str) -> float:
         scores = self.pipe({"text": premise, "text_pair": hypothesis})
@@ -134,8 +136,8 @@ class CrossEncoderNLI:
         return 0.0
 
 
-def get_nli(name: str) -> NLI:
-    return LexicalNLI() if name == "lexical" else CrossEncoderNLI(name)
+def get_nli(name: str, device: str | None = None) -> NLI:
+    return LexicalNLI() if name == "lexical" else CrossEncoderNLI(name, device=device)
 
 
 # ---- consolidator ------------------------------------------------------------------------------

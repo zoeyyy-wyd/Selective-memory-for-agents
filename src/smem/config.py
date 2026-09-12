@@ -27,6 +27,11 @@ class WriteConfig(BaseModel):
     sieve_eps: float = 1.0             # geometric threshold grid (1+eps)^i for SieveStreaming
     sieve_min_threshold: float = 0.0   # lowest threshold as a fraction of the max gain/token; 0 = auto (≈ cost/2B)
     sieve_max_threshold: float = 0.5
+    # Cost floor used ONLY when estimating the sieve's scale (max singleton gain per token). Without it a
+    # 2-token fact sets the scale at ~56 and the lowest threshold demands gain/token >= 0.19, which
+    # ordinary 20-40 token episodes never reach: the store filled to 32% of B and eviction never ran.
+    # A candidate's own admission ratio still uses its true cost.
+    sieve_cost_floor: int = 20
     hysteresis_gamma: float = 0.1      # γ: swap only if new gain ≥ (1+γ) × victim gain
     episode_dup_sim: float = 0.95      # near-duplicate episodes are merged, not re-stored
     validity_chain: bool = True        # False = overwrite (the no_validity_chain ablation)
@@ -87,6 +92,7 @@ class ModelConfig(BaseModel):
     embedder: str = "hash"              # "hash" (offline) or a sentence-transformers name, e.g. BAAI/bge-m3
     embed_dim: int = 256                # used by the hash embedder only
     embed_device: str | None = None     # None = sentence-transformers default (cuda if free); "cpu" if vLLM owns the card
+    nli_device: str | None = None       # same, for the NLI cross-encoder
     extract_model: str = "Qwen/Qwen3-8B-AWQ"
     extract_base_url: str = "http://localhost:8000/v1"
     answer_model: str = "gpt-4.1-mini"

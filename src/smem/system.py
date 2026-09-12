@@ -75,7 +75,7 @@ class SelectiveMemory:
         self.evictor = Evictor(cfg, self.store, self.hawkes)
         self.writer = WritePolicy(cfg, self.store, self.evictor, self.hawkes, self.embedder.dim)
         self.consolidator = Consolidator(cfg, self.store, self.writer, self.embedder,
-                                         summarizer or HeuristicSummarizer(), nli or get_nli(cfg.models.nli_model))
+                                         summarizer or HeuristicSummarizer(), nli or get_nli(cfg.models.nli_model, cfg.models.nli_device))
         self.reader = Reader(cfg, self.store, self.embedder, self.hawkes, rewriter)
         self.session_ids: list[str] = []
         self.candidate_origin: dict[str, tuple[str, int]] = {}

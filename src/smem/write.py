@@ -49,11 +49,13 @@ class WriteStats:
         return self.__dict__.copy()
 
 
-def sieve_thresholds(cfg: SystemConfig, typical_cost: int = 20) -> list[float]:
+def sieve_thresholds(cfg: SystemConfig, typical_cost: int | None = None) -> list[float]:
     """Geometric grid of admission thresholds, as fractions of the running max singleton gain per
     token. The low end follows the SieveStreaming guess OPT ≈ m · B / cost (so the threshold is
     m / (2B) per token); the high end is 1/2. `sieve_min_threshold` = 0 means that automatic low end."""
     w = cfg.write
+    if typical_cost is None:
+        typical_cost = w.sieve_cost_floor
     if w.policy != "sieve":
         return [0.0]
     lo = w.sieve_min_threshold or max(1e-4, typical_cost / (2.0 * max(cfg.budget.store_tokens, 1)))
@@ -106,7 +108,7 @@ class WritePolicy:
         for s in self.sieves:
             s.cov.set_weights(weights)
         if self.sieves[0].cov.targets:
-            self.max_ratio = max(self.sieves[0].cov.max_singleton_ratio(), 1e-9)
+            self.max_ratio = max(self.sieves[0].cov.max_singleton_ratio(cost_floor=self.cfg.write.sieve_cost_floor), 1e-9)
 
     # ---- ingestion -----------------------------------------------------------------------------
     def ingest(self, result: ExtractionResult, vecs: dict[str, np.ndarray], now: datetime) -> list[str]:
@@ -191,7 +193,9 @@ class WritePolicy:
         for s in self.sieves:
             s.cov.add_target(e.id, vec, w, cost=e.tokens)
         singleton = self.sieves[0].cov.singleton(vec) / max(e.tokens, 1)
-        self.max_ratio = max(self.max_ratio, singleton)
+        # scale estimate only: a very short entry must not set the bar for everyone
+        singleton_scale = self.sieves[0].cov.singleton(vec) / max(e.tokens, 1)
+        self.max_ratio = max(self.max_ratio, singleton_scale)
         admitted_anywhere = False
         for s in self.sieves:
             if self._consider(s, e, vec, now, protect):

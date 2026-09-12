@@ -90,15 +90,17 @@ class CoverageState:
     def value(self) -> float:
         return float(np.dot(self._w, self._best))
 
-    def max_singleton_ratio(self) -> float:
-        """max_h f({h}) / cost(h) over all targets under the current weights: the SieveStreaming
-        normaliser. One |H|×|H| product; H is in the low thousands."""
+    def max_singleton_ratio(self, cost_floor: int = 1) -> float:
+        """max_h f({h}) / max(cost(h), cost_floor) over all targets under the current weights: the
+        SieveStreaming normaliser. The floor keeps a 2-token entry from setting the scale for
+        everyone (without it, on real embeddings, the lowest sieve rejected 96% of candidates with the
+        store two-thirds empty). One |H|×|H| product; H is in the low thousands."""
         n = len(self._h_ids)
         if n == 0:
             return 0.0
         sims = np.maximum(self._h_vecs @ self._h_vecs.T, 0.0)
         singles = sims @ self._w
-        return float(np.max(singles / self._cost))
+        return float(np.max(singles / np.maximum(self._cost, cost_floor)))
 
     def singleton(self, vec: np.ndarray) -> float:
         """f({x}): coverage x would provide on its own."""
