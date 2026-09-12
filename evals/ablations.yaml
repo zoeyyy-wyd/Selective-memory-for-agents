@@ -77,3 +77,20 @@ sweeps:
 figure1:
   full_curve: [swap, lru]
   tight_only: [fifo, random, utility_heuristic, swap_no_hawkes]
+
+# Dev calibration of the sieve's lowest admission threshold (ingest only, no API; 20 answerable dev
+# questions, B=0.03, evict=swap, real bge-m3). Judged by what each setting KEEPS, not by fill:
+#
+#   sieve_min_threshold   evidence write   evidence survival   admitted/candidates   evictions/q
+#   auto (0.0)                 0.33              0.31                 28%                 0
+#   1e-3                       0.70              0.63                 43%                77
+#   3e-4                       0.89              0.74                 47%               337   <- chosen
+#   1e-4                       0.93              0.75                 48%               632
+#
+# The automatic estimate (max singleton gain per token) was set by one hub entry similar to every
+# filler session, so the bar rejected two thirds of the evidence while the store sat 20% empty and
+# eviction never ran. Below 3e-4 the admitted fraction plateaus at ~47%: the half that is rejected
+# is rejected by near-zero coverage gain, not by the bar. 1e-4 buys +4 points of write rate for twice
+# the swap churn and no survival gain. Frozen at 3e-4 for every ablation and for the test split.
+calibration:
+  sieve_min_threshold: 0.0003

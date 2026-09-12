@@ -23,6 +23,7 @@ write:
   policy: sieve
   validity_chain: true
   sieve_eps: 1.0
+  sieve_min_threshold: 0.0003   # calibrated on 20 dev q at B=0.03 (evals/ablations.yaml: calibration)
   hysteresis_gamma: 0.1
 evict:
   policy: swap
