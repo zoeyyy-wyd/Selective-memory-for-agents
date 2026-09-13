@@ -98,6 +98,10 @@ class OpenAICompatLLM:
         self.retry_base_delay = retry_base_delay
         self.retry_max_delay = retry_max_delay
         self.n_retries = 0
+        self.max_output_tokens_cap = 8192
+        self.empty_retries = 6
+        self.n_empty_responses = 0     # empty completions seen (each retried)
+        self.n_still_empty = 0         # gave up after the retries
 
     def _is_vllm(self) -> bool:
         """Self-hosted OpenAI-compatible server, i.e. one that takes vLLM's vendor fields. A hosted
@@ -164,12 +168,32 @@ class OpenAICompatLLM:
         resp = self._create_with_retry(kwargs)
         text = resp.choices[0].message.content or ""
         self.calls += 1
+        # An EMPTY completion is a failure, not an answer. Two causes seen live: a reasoning model
+        # spending all of max_tokens on reasoning (finish_reason="length"), and a throttled gateway
+        # returning content=None with zero tokens and finish_reason="stop" -- 30-60% of calls to the
+        # glm free tier between 11:00 and 17:00. Either way the judge would score "" as wrong, so retry
+        # with backoff (doubling max_tokens when the cap was the cause) and raise if it never fills in;
+        # a run that stops can be resumed, a run that records "" cannot be told apart from a wrong answer.
+        attempt = 0
+        while not text.strip() and attempt < self.empty_retries:
+            attempt += 1; self.n_empty_responses += 1
+            if getattr(resp.choices[0], "finish_reason", None) == "length":
+                kwargs["max_tokens"] = min(kwargs["max_tokens"] * 2, self.max_output_tokens_cap)
+            time.sleep(min(self.retry_base_delay * (2 ** attempt), self.retry_max_delay))
+            resp = self._create_with_retry(kwargs)
+            text = resp.choices[0].message.content or ""
+            self.calls += 1
+        if not text.strip():
+            self.n_still_empty += 1
+            raise RuntimeError(f"{self.model} returned an empty completion {attempt + 1} times in a row "
+                               f"(finish_reason={getattr(resp.choices[0], 'finish_reason', None)}); the gateway is "
+                               "probably throttling -- resume the run later")
         served = getattr(resp, "model", None) or self.model
         self.served_models[served] += 1
         if resp.usage is not None:
             self.prompt_tokens += resp.usage.prompt_tokens or 0
             self.completion_tokens += resp.usage.completion_tokens or 0
-        if self.cache is not None:
+        if self.cache is not None and text.strip():
             self.cache.put(cache_key, text, {"model": self.model, "served_model": served})
         return text
 

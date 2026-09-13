@@ -222,3 +222,40 @@ def test_missing_key_names_the_variable(monkeypatch):
     monkeypatch.delenv("TOKENROUTER_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="TOKENROUTER_API_KEY"):
         build_llm("gpt-4o", None, cfg, api_key_env="TOKENROUTER_API_KEY")
+
+
+def test_empty_completion_is_retried_and_never_cached(tmp_path):
+    """"" from the model is a failure: a throttled gateway (finish=stop, 0 tokens) or reasoning that ate
+    max_tokens (finish=length). Retry; double the cap only in the second case; never cache ""."""
+    from types import SimpleNamespace as NS
+
+    import pytest
+
+    from smem.llm import OpenAICompatLLM
+
+    llm = OpenAICompatLLM("m", base_url="https://x.example/v1", api_key="k", cache_dir=str(tmp_path),
+                          retry_base_delay=0.0, retry_max_delay=0.0)
+    seen = []
+
+    def throttled_then_ok(**kw):
+        seen.append(kw["max_tokens"])
+        if len(seen) < 3:
+            return NS(choices=[NS(message=NS(content=None), finish_reason="stop")], usage=None, model="m")
+        return NS(choices=[NS(message=NS(content="3:1"), finish_reason="stop")], usage=None, model="m")
+
+    llm.client.chat.completions.create = throttled_then_ok
+    assert llm.complete("s", "u", max_tokens=2048) == "3:1"
+    assert seen == [2048, 2048, 2048] and llm.n_empty_responses == 2      # stop => no doubling
+    assert len(list(tmp_path.glob("*.json"))) == 1                        # the good answer is cached
+
+    seen.clear()
+    def cap_then_ok(**kw):
+        seen.append(kw["max_tokens"])
+        return NS(choices=[NS(message=NS(content=None if len(seen) == 1 else "ok"), finish_reason="length" if len(seen) == 1 else "stop")], usage=None, model="m")
+    llm.client.chat.completions.create = cap_then_ok
+    assert llm.complete("s", "u2", max_tokens=2048) == "ok" and seen == [2048, 4096]   # length => doubled
+
+    llm.client.chat.completions.create = lambda **kw: NS(choices=[NS(message=NS(content=""), finish_reason="stop")], usage=None, model="m")
+    with pytest.raises(RuntimeError, match="empty completion"):
+        llm.complete("s", "u3", max_tokens=100)
+    assert len(list(tmp_path.glob("*.json"))) == 2                        # nothing empty was cached
