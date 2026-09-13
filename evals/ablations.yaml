@@ -2,81 +2,20 @@
 # of a group with the same base config; each row is a set of dotted overrides.
 base: configs/default.yaml
 groups:
-  write:
-    all:                {write.policy: all}
-    novelty_threshold:  {write.policy: novelty_threshold}
-    sieve:              {write.policy: sieve}
+  # Kept: the one comparison that matters for a working system -- does the swap rule beat the
+  # simplest eviction, and is the Hawkes prior worth keeping (drop the code if not). LRU behaves like
+  # FIFO in a stream with no re-access, so it is not run separately.
   evict:
-    fifo:               {evict.policy: fifo}
-    lru:                {evict.policy: lru}
-    random:             {evict.policy: random}
-    utility_heuristic:  {evict.policy: utility_heuristic}
     swap:               {evict.policy: swap}
     swap_no_hawkes:     {evict.policy: swap_no_hawkes}
-  validity_chain:
-    chain:              {write.validity_chain: true}
-    no_validity_chain:  {write.validity_chain: false}
-  consolidation:
-    redundancy:         {consolidation.policy: redundancy}
-    fixed_interval:     {consolidation.policy: fixed_interval}
-    no_consolidation:   {consolidation.policy: no_consolidation}
-    no_nli_check:       {consolidation.policy: no_nli_check}
-  retrieval:
-    single_hop:         {read.retrieval: single_hop}
-    two_hop:            {read.retrieval: two_hop}
-  packing:
-    topk:               {read.packing: topk}
-    mmr:                {read.packing: mmr}
-    budgeted_greedy:    {read.packing: budgeted_greedy}
-  constrained_decoding:
-    constrained:        {extract.constrained_decoding: true}
-    no_constrained_decoding: {extract.constrained_decoding: false}
-# Figure 1: store budget sweep (fractions of history tokens); Figure 2: read budget sweep.
-# Reference: pass these to --store-budget / --read-budget; the runner does not read this block.
-#
-# Both sweeps have a degenerate end, measured offline on dev (6 questions, heuristic extractor):
-#
-#   store_budget  swap vs fifo, identical injected context
-#     0.125            6/6      <- store uses ~10.9k against a ~12.9k budget: nothing is ever evicted
-#     0.06             0/6
-#     0.03             0/6
-#     0.015            0/6
-#
-#   read_budget   budgeted_greedy vs topk, identical injected context   injected tokens
-#     8000             6/6                                                  1083   <- candidate set
-#     4000             6/6                                                  1083      exhausted; the
-#     2000             6/6                                                  1045      budget never binds
-#     1000             2/6                                                   833   <- packing binds here
-#
-# So B=0.125 is kept as the free "no pressure" anchor -- all six eviction policies produce the same
-# store there, so five of the six runs are DiskCache hits -- and it is NOT a stress test: the plan's
-# risk mitigation calls for an extreme test at 12.5%, where every policy scores identically by
-# construction. Use 0.015 for that.
-#
-# The read budgets below are PROVISIONAL. The plateau above moves up with the real Qwen3-8B
-# extractor, which pulls more entries per session than the heuristic one. Re-measure it once the
-# extraction cache is built. Point answering at the local vLLM server too, so this costs no API
-# calls -- only injected_tokens is being read, and --backend llm would otherwise bill the answerer:
-#   for r in 250 500 1000 2000 4000; do
-#     smem-eval --split dev --backend llm --judge exact --limit 20 --store-budget 0.03 \
-#               --read-budget $r --ablate read.packing=topk \
-#               --ablate models.answer_model=Qwen/Qwen3-8B-AWQ \
-#               --ablate models.answer_base_url=http://localhost:8000/v1
-#   done
-# and put four points spanning the region where injected_tokens still tracks the budget. Points
-# above the plateau cost the most per call (R tokens of input each) and carry no information.
-sweeps:
-  store_budget: [0.125, 0.06, 0.03, 0.015]
-  read_budget: [250, 500, 1000, 2000]
-
-# Figure 1 does not need all six policies at all four budgets. The full curve is what the headline
-# claim ("swap degrades more gracefully") needs; the rest only have to be beaten where the pressure
-# is real. ~15 distinct runs instead of 24:
-#   all six policies      at B in {0.03, 0.015}
-#   swap + lru            at B in {0.125, 0.06} as well
-figure1:
-  full_curve: [swap, lru]
-  tight_only: [fifo, random, utility_heuristic, swap_no_hawkes]
+    fifo:               {evict.policy: fifo}
+# Removed on 2026-09-13: the write / consolidation / retrieval / packing / constrained_decoding groups,
+# the utility_heuristic and random eviction arms, and the store- and read-budget sweeps (~50 runs).
+# The diagnostics showed the losses are upstream of every one of those switches: extraction drops ~27%
+# of look-up-able answers outright, fact values are lossy ("my go-to is 3:1" -> "experimenting with
+# ratios"), and the free-tier answerer returns empty completions under load. Until those are fixed,
+# comparing packing algorithms or read budgets would be measuring noise. Reference point that IS run:
+# the system with no store budget at all (omit --store-budget), which is the pipeline's own ceiling.
 
 # Dev calibration of the sieve's lowest admission threshold (ingest only, no API; 20 answerable dev
 # questions, B=0.03, evict=swap, real bge-m3). Judged by what each setting KEEPS, not by fill:
