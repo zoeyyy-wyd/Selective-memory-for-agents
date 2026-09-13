@@ -31,3 +31,16 @@ def test_fact_validity():
     assert f.is_valid_at(datetime(2023, 3, 1))
     assert not f.is_valid_at(datetime(2023, 5, 19))
     assert not f.is_valid_at(datetime(2023, 1, 1))
+
+
+def test_infra_knobs_do_not_change_the_run_identity():
+    """A timeout edit or a device move mid-campaign must not orphan a half-finished run."""
+    from smem.config import SystemConfig
+
+    base = SystemConfig.load("configs/tokenrouter.yaml")
+    same = base.with_overrides({"models.embed_device": "cpu", "models.nli_device": "cpu",
+                                "models.request_timeout": 5.0, "models.retry_attempts": 1, "extract.cache_dir": "/x"})
+    assert same.config_hash() == base.config_hash()
+    diff = base.with_overrides({"evict.policy": "fifo"})
+    assert diff.config_hash() != base.config_hash()
+    assert SystemConfig.is_infra_key("models.embed_device") and not SystemConfig.is_infra_key("evict.policy")

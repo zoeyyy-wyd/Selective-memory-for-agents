@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -35,6 +35,14 @@ class WriteConfig(BaseModel):
     hysteresis_gamma: float = 0.1      # γ: swap only if new gain ≥ (1+γ) × victim gain
     episode_dup_sim: float = 0.95      # near-duplicate episodes are merged, not re-stored
     validity_chain: bool = True        # False = overwrite (the no_validity_chain ablation)
+    # A validity chain means "same key, new value => the old value was superseded". That is true of a
+    # single-valued attribute (one location, one employer, one running count) and false of a
+    # multi-valued one: a user has many goals, several health issues, dozens of preferences at once.
+    # Chaining those turned 16 distinct health facts into one chain whose read-time resolution kept
+    # only the tail, so retrieved evidence vanished before packing. Same key + new value on one of
+    # these attributes is a new independent fact; exact-value duplicates still merge.
+    multi_valued_attributes: list[str] = ["preference", "favorite", "dislike", "allergy", "health", "goal",
+                                          "relationship", "method", "other"]
 
 
 class EvictConfig(BaseModel):
@@ -152,8 +160,35 @@ class SystemConfig(BaseModel):
     models: ModelConfig = Field(default_factory=ModelConfig)
     anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig)
 
+    # Fields that change how a run is executed but not what it computes: devices, cache locations,
+    # timeouts, retries, which env var holds a key. They stay out of the run identity so that editing
+    # a timeout mid-campaign, or moving embeddings to the CPU, does not orphan a half-finished run's
+    # records (it did: a resumed run landed in a fresh directory and started over).
+    INFRA_FIELDS: ClassVar[frozenset[str]] = frozenset({
+        "models.embed_device", "models.nli_device", "models.llm_cache_dir", "models.embed_cache_dir",
+        "models.request_max_retries", "models.request_timeout", "models.retry_attempts",
+        "models.retry_base_delay", "models.retry_max_delay", "models.answer_api_key_env", "models.judge_api_key_env",
+        "extract.cache_dir", "anthropic.max_retries", "anthropic.timeout",
+    })
+
+    @classmethod
+    def is_infra_key(cls, dotted: str) -> bool:
+        return dotted in cls.INFRA_FIELDS
+
+    def identity(self) -> dict[str, Any]:
+        """model_dump with the infra fields removed: everything that can change a result."""
+        data = self.model_dump(mode="json")
+        for key in self.INFRA_FIELDS:
+            node = data
+            parts = key.split(".")
+            for p in parts[:-1]:
+                node = node.get(p, {}) if isinstance(node, dict) else {}
+            if isinstance(node, dict):
+                node.pop(parts[-1], None)
+        return data
+
     def config_hash(self) -> str:
-        payload = json.dumps(self.model_dump(mode="json"), sort_keys=True)
+        payload = json.dumps(self.identity(), sort_keys=True)
         return hashlib.sha1(payload.encode()).hexdigest()[:12]
 
     def with_overrides(self, overrides: dict[str, Any]) -> SystemConfig:

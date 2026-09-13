@@ -148,6 +148,13 @@ class Reader:
             if not chain:
                 continue
             nodes = self._select_nodes(chain, constraint)
+            # With an explicit temporal cue (now / in March / how many times / previously) the
+            # selected nodes ARE the answer and replacing the hit is the design (plan section 09).
+            # Without one, "trust the tail" has no basis: the hit was retrieved because it matched
+            # the question, and dropping it for the tail is what emptied the context on questions
+            # like "which did I deal with first" -- so there the hit is kept alongside the tail.
+            if constraint.mode == "none" and all(node.id != id_ for node, _ in nodes):
+                nodes = [(entry, "hit")] + nodes
             for node, reason in nodes:
                 r = rel if node.id == id_ else rel * 0.9
                 prev = out.get(node.id)

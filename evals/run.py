@@ -118,9 +118,10 @@ def load_questions(args) -> list[LMEQuestion]:
 
 
 def run_id(cfg: SystemConfig, args, overrides: dict[str, Any]) -> str:
+    scientific = {k: v for k, v in overrides.items() if not SystemConfig.is_infra_key(k)}
     payload = {"cfg": cfg.config_hash(), "backend": args.backend, "split": args.split, "baseline": args.baseline,
                "store_budget": args.store_budget, "read_budget": args.read_budget, "judge": args.judge,
-               "types": args.types, "overrides": overrides}
+               "types": args.types, "overrides": scientific}
     return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:12]
 
 

@@ -75,7 +75,8 @@ models:
   judge_api_key_env: OPENAI_API_KEY
   nli_model: cross-encoder/nli-deberta-v3-base
   llm_cache_dir: .cache/llm
-  request_max_retries: 6            # the gateway 503s intermittently ("system disk overloaded")
+  request_max_retries: 2            # SDK-level; the retry_* layer below does the real waiting
+  request_timeout: 120.0            # glm answers in ~9s; a hung stream at the gateway sat silent 5+ min under the 600s default
   retry_attempts: 8                 # outages lasted minutes, so back off far longer than the SDK does
   retry_max_delay: 90.0
   schema_mode: response_format

@@ -57,3 +57,52 @@ def test_search_and_entity_index():
     assert store.by_entity("milo") == {"ep_1"}
     store.touch("ep_1", datetime(2023, 2, 1))
     assert store.episodes["ep_1"].access_count == 1
+
+
+def test_multi_valued_attributes_do_not_chain_but_single_valued_do():
+    """16 distinct (user, health) facts are 16 facts, not one 16-node update chain; (user, location)
+    with a new value is a knowledge update."""
+    from datetime import datetime
+
+    from smem.config import SystemConfig
+    from smem.schemas import Session, Turn
+    from smem.system import build_system
+
+    cfg = SystemConfig.load("configs/offline.yaml")
+    mem = build_system(cfg, "offline")
+    t = datetime(2023, 1, 1)
+    mem.ingest([Session(session_id="s1", ts=t, turns=[Turn(role="user", content="I have a pet allergy. My goal is to run a marathon. I live in Boston.")]),
+                Session(session_id="s2", ts=t.replace(month=3), turns=[Turn(role="user", content="I have back pain. My goal is to learn piano. I live in Seattle.")])])
+    from smem.schemas import Fact
+    facts = [e for e in mem.store.entries(mem.writer.active_ids()) if isinstance(e, Fact)]
+    health = [f for f in facts if f.attribute == "health"]; loc = [f for f in facts if f.entity == "user" and f.attribute == "location"]
+    assert all(f.superseded_by is None and f.valid_to is None for f in health), "multi-valued facts must not be superseded"
+    if len(loc) == 2:   # the heuristic extractor may or may not pull both; when it does, it must chain
+        assert sum(f.superseded_by is not None for f in loc) == 1
+    mem.close()
+
+
+def test_chain_resolution_keeps_the_retrieved_hit():
+    from datetime import datetime
+
+    from smem.read import Reader
+    from smem.schemas import Fact
+    from smem.temporal import parse_temporal
+
+    class FakeStore:
+        def __init__(self, chain): self.chain_ = chain; self.by_id = {f.id: f for f in chain}
+        def get(self, i): return self.by_id.get(i)
+        def chain(self, i): return self.chain_
+        def volatility(self, e, a): return 1.0
+    t = datetime(2023, 1, 1)
+    chain = [Fact(id=f"f{i}", entity="user", attribute="location", value=f"city{i}", valid_from=t.replace(month=i+1)) for i in range(4)]
+    for a, b in zip(chain, chain[1:]): a.superseded_by = b.id; a.valid_to = b.valid_from
+    r = Reader.__new__(Reader); r.store = FakeStore(chain); r.cfg = type("C", (), {"write": type("W", (), {"validity_chain": True})()})()
+    allowed = {f.id for f in chain}
+    c = parse_temporal("Which city was it, the one with the harbour?", t.replace(month=6)); assert c.mode == "none"
+    ids = {x.id for x in r._resolve_chains({"f1": 0.9}, c, allowed, None)}
+    assert "f1" in ids, "no temporal cue: the retrieved node must survive resolution"
+    assert "f3" in ids, "and the tail is still offered"
+    c = parse_temporal("Where do I live now?", t.replace(month=6)); assert c.mode == "now"
+    ids = {x.id for x in r._resolve_chains({"f1": 0.9}, c, allowed, None)}
+    assert ids == {"f3"}, "an explicit 'now' resolves to the tail only, as designed"

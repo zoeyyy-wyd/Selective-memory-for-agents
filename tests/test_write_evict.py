@@ -82,9 +82,9 @@ def test_near_duplicate_episodes_are_merged_not_stored():
 def test_fact_merge_unions_sources_and_update_builds_chain():
     cfg = SystemConfig().with_overrides({"write.policy": "all", "consolidation.policy": "no_consolidation"})
     mem = SelectiveMemory(cfg)
-    f1 = Fact(id="f_aaaaaa1", entity="user", attribute="city", value="Boston", valid_from=T0, sources=["ep_x"], tokens=4)
-    f2 = Fact(id="f_aaaaaa2", entity="user", attribute="city", value="boston", valid_from=T0 + timedelta(days=3), sources=["ep_y"], tokens=4)
-    f3 = Fact(id="f_aaaaaa3", entity="user", attribute="city", value="Seattle", valid_from=T0 + timedelta(days=30), sources=["ep_z"], tokens=4)
+    f1 = Fact(id="f_aaaaaa1", entity="user", attribute="location", value="Boston", valid_from=T0, sources=["ep_x"], tokens=4)
+    f2 = Fact(id="f_aaaaaa2", entity="user", attribute="location", value="boston", valid_from=T0 + timedelta(days=3), sources=["ep_y"], tokens=4)
+    f3 = Fact(id="f_aaaaaa3", entity="user", attribute="location", value="Seattle", valid_from=T0 + timedelta(days=30), sources=["ep_z"], tokens=4)
     feed(mem, [], [f1], day=0)
     feed(mem, [], [f2], day=3)
     assert mem.writer.stats.merged == 1 and mem.store.facts["f_aaaaaa1"].sources == ["ep_x", "ep_y"]
@@ -97,8 +97,8 @@ def test_no_validity_chain_overwrites():
     cfg = SystemConfig().with_overrides({"write.policy": "all", "write.validity_chain": False,
                                          "consolidation.policy": "no_consolidation"})
     mem = SelectiveMemory(cfg)
-    f1 = Fact(id="f_bbbbbb1", entity="user", attribute="city", value="Boston", valid_from=T0, tokens=4)
-    f3 = Fact(id="f_bbbbbb3", entity="user", attribute="city", value="Seattle", valid_from=T0 + timedelta(days=30), tokens=4)
+    f1 = Fact(id="f_bbbbbb1", entity="user", attribute="location", value="Boston", valid_from=T0, tokens=4)
+    f3 = Fact(id="f_bbbbbb3", entity="user", attribute="location", value="Seattle", valid_from=T0 + timedelta(days=30), tokens=4)
     feed(mem, [], [f1], day=0)
     feed(mem, [], [f3], day=30)
     assert "f_bbbbbb1" not in mem.store and "f_bbbbbb3" in mem.writer.active_ids()
@@ -108,8 +108,8 @@ def test_chain_is_evicted_as_a_unit():
     cfg = SystemConfig().with_overrides({"budget.store_tokens": 40, "write.policy": "all", "evict.policy": "fifo",
                                          "consolidation.policy": "no_consolidation"})
     mem = SelectiveMemory(cfg)
-    f1 = Fact(id="f_cccccc1", entity="user", attribute="city", value="Boston", valid_from=T0, tokens=4)
-    f2 = Fact(id="f_cccccc2", entity="user", attribute="city", value="Seattle", valid_from=T0 + timedelta(days=1), tokens=4)
+    f1 = Fact(id="f_cccccc1", entity="user", attribute="location", value="Boston", valid_from=T0, tokens=4)
+    f2 = Fact(id="f_cccccc2", entity="user", attribute="location", value="Seattle", valid_from=T0 + timedelta(days=1), tokens=4)
     feed(mem, [], [f1], day=0)
     feed(mem, [], [f2], day=1)
     feed(mem, [ep(9, "a completely different long event about a marathon in June", day=2, tokens=35)], day=2)

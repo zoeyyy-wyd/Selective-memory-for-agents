@@ -17,6 +17,7 @@ import numpy as np
 from smem.config import SystemConfig
 from smem.coverage import CoverageState
 from smem.evict import Evictor
+from smem.extract import CANONICAL_ATTRIBUTES
 from smem.hawkes import HawkesIntensity, hawkes_keys, source_weight, specificity
 from smem.schemas import Entry, ExtractionResult, Fact
 from smem.store import MemoryStore
@@ -171,6 +172,9 @@ class WritePolicy:
                 existing.sources = list(dict.fromkeys(existing.sources + f.sources))
                 self.store.update(existing)
                 return "merge", existing
+        if f.attribute in self.cfg.write.multi_valued_attributes or f.attribute not in CANONICAL_ATTRIBUTES:
+            # custom_attribute keys (outside the closed list) are open-ended too: no supersession
+            return "new", None
         tail = chain[-1]
         return "update", tail
 
