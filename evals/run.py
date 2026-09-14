@@ -48,7 +48,13 @@ def run_question(cfg: SystemConfig, q: LMEQuestion, backend: str, judge: Judge, 
     q_cfg = cfg.with_overrides({"budget.store_tokens": resolve_store_budget(store_budget, history)})
     mem: SelectiveMemory = build_system(q_cfg, backend)
     try:
-        mem.ingest(q.sessions)
+        cache_dir = Path(cfg.models.ingest_cache_dir) / q_cfg.ingest_key(q.question_id) if cfg.models.ingest_cache_dir else None
+        if cache_dir is not None and (cache_dir / "state.pkl").exists():
+            mem.load_state(cache_dir)
+        else:
+            mem.ingest(q.sessions)
+            if cache_dir is not None:
+                mem.save_state(cache_dir)
         result = mem.ask(q.question, now=q.question_date)
         counts = evidence_counts(mem, q, result.injected_ids)
         correct = None if isinstance(judge, NoJudge) else judge.judge(q, result.answer)
@@ -56,7 +62,7 @@ def run_question(cfg: SystemConfig, q: LMEQuestion, backend: str, judge: Judge, 
         return QuestionRecord(
             question_id=q.question_id, question_type=q.question_type, is_abstention=q.is_abstention,
             question=q.question, gold=q.answer, answer=result.answer, abstained=result.abstained, correct=correct,
-            injected_tokens=result.read.tokens, injected_entries=len(result.read.packed),
+            injected_tokens=result.read.tokens, injected_entries=len(result.read.packed), raw_tokens=result.read.raw_tokens,
             store_tokens=stats["store_tokens"], store_entries=stats["store_entries"], history_tokens=history,
             invalid_citations=len(result.invalid_citations), config_hash=q_cfg.config_hash(),
             extra={"stats": stats, "injected_ids": sorted(result.injected_ids), "constraint": result.read.constraint.mode,

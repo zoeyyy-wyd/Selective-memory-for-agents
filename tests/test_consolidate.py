@@ -76,3 +76,32 @@ def test_consolidated_episodes_are_first_out_under_pressure():
         mem.ingest_session(session(f"n{i}", 10 + i, f"I went to a new unrelated event about {topic} number {i}."))
     survivors = mem.surviving_ids()
     assert len(consolidated_before & survivors) < len(consolidated_before)
+
+
+def test_summary_supported_direction_keeps_grounded_facts_and_drops_hallucinated_ones():
+    """New default gate: a summary fact survives only if some member entails it. The old rule asked the
+    summary to entail every member, which a lossy summary cannot do (229/230 rejected on dev)."""
+    from smem.consolidate import LexicalNLI, _summary_fact
+
+    class Scripted:
+        def summarize(self, members, vecs):
+            return [_summary_fact("user", "favorite", "garlic tomato pasta", members),   # words in the members
+                    _summary_fact("user", "location", "Zanzibar volcano lodge", members)]   # invented
+
+    cfg = SystemConfig.load("configs/offline.yaml", {"write.policy": "all", "write.episode_dup_sim": 1.01,
+                                                       "consolidation.redundancy_threshold": 0.9,
+                                                       "consolidation.nli_threshold": 0.5})
+    mem = SelectiveMemory(cfg, summarizer=Scripted(), nli=LexicalNLI())
+    mem.ingest(near_duplicate_sessions())
+    st = mem.consolidator.stats
+    assert st.clusters_fired >= 1 and st.summaries_accepted >= 1
+    admitted = [f for f in mem.store.facts.values() if f.id.startswith("fs_")]
+    assert admitted and all("Zanzibar" not in f.value for f in admitted)       # hallucinated fact dropped
+    assert any(f.value == "garlic tomato pasta" for f in admitted)              # grounded fact kept
+
+    old = SystemConfig.load("configs/offline.yaml", {"write.policy": "all", "write.episode_dup_sim": 1.01,
+                                                       "consolidation.redundancy_threshold": 0.9,
+                                                       "consolidation.nli_direction": "members_entailed"})
+    mem2 = SelectiveMemory(old, summarizer=Scripted(), nli=LexicalNLI())
+    mem2.ingest(near_duplicate_sessions())
+    assert mem2.consolidator.stats.summaries_accepted == 0                      # the original rule rejects

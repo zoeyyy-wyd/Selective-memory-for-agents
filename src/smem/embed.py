@@ -82,11 +82,15 @@ class CachedEmbedder:
         self.name = name
         self.dim = inner.dim
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(path)
+        # several evaluation shards share this file; wait for a writer instead of raising 'database is locked'
+        self.db = sqlite3.connect(path, timeout=30)
         self.db.execute("CREATE TABLE IF NOT EXISTS emb (key TEXT PRIMARY KEY, vec BLOB)")
 
     def _key(self, text: str) -> str:
         return hashlib.sha1(f"{self.name}\x00{text}".encode()).hexdigest()
+
+    def has(self, text: str) -> bool:
+        return self.db.execute("SELECT 1 FROM emb WHERE key=?", (self._key(text),)).fetchone() is not None
 
     def encode(self, texts: list[str]) -> np.ndarray:
         out = np.zeros((len(texts), self.dim), dtype=np.float32)
@@ -106,10 +110,18 @@ class CachedEmbedder:
         return out
 
 
+_MODEL_CACHE: dict[tuple[str, str | None], SentenceTransformerEmbedder] = {}
+
+
 def get_embedder(name: str, dim: int = 256, cache_dir: str | None = None, device: str | None = None) -> Embedder:
     if name == "hash":
         return HashEmbedder(dim)
-    model = SentenceTransformerEmbedder(name, device=device)
+    # build_system runs once per question; reloading a 2 GB encoder from disk each time cost ~15 s
+    # a question. The model is stateless, so one instance per (name, device) serves the whole process.
+    key = (name, device)
+    if key not in _MODEL_CACHE:
+        _MODEL_CACHE[key] = SentenceTransformerEmbedder(name, device=device)
+    model = _MODEL_CACHE[key]
     if cache_dir:
         return CachedEmbedder(model, name, f"{cache_dir}/{name.replace('/', '__')}.sqlite")
     return model

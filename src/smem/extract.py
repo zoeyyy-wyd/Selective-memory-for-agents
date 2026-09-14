@@ -19,7 +19,7 @@ from smem.schemas import Episode, ExtractionResult, Fact, Session, Turn, make_id
 from smem.temporal import normalize_relative_date
 from smem.tokens import count_tokens
 
-PROMPT_VERSION = "v3-detail1"
+PROMPT_VERSION = "v3"          # default (original) prompt; see PROMPT_VARIANTS
 
 # Keys: the long tail lives in the ENTITY (a noun phrase naming the thing described), the ATTRIBUTE
 # comes from this closed list so that constrained decoding pins it. Two facts about the same thing
@@ -113,13 +113,7 @@ skip the assistant's explanations unless the user acted on them. Include the tur
 Convert relative dates ("last Wednesday", "next month") to absolute dates using the session date.
 
 "facts": (entity, attribute, value) triples for anything a later question could ask about.
-The value MUST keep the specific number, time, date, quantity, ratio, price, name or title the speaker
-stated -- "3:1", "6:30 pm", "February 14th", "$495", "Golden Retriever", "The Glass Menagerie" -- never
-a generalisation of it ("experimenting with ratios", "evening", "a breed"). If the user gives a
-detail, the detail is the value. A fact without its detail is worthless later.
-Also record the assistant's CONCRETE recommendations the user asked for and reacted to (a named
-place, title, product, amount or instruction): entity = the thing, kind = "stated", speaker = "assistant".
-
+{detail_rules}
 Entity rules. The entity is THE THING THE ATTRIBUTE DESCRIBES. Use "user" only for the user's own personal
 attributes (name, location, employer, occupation, allergy, health, preferences, relationships). Anything the
 user owns, does, tracks or collects, and any other person, is its own entity: a short snake_case noun phrase,
@@ -137,6 +131,34 @@ Examples:
 
 kind = "stated" for explicit statements, "preference" for likes/dislikes, "inferred" if you had to infer it.
 speaker = who asserted it. valid_from = ISO date if the fact explicitly starts at a date, else null."""
+
+# Prompt variants. The selected name is part of the extraction cache key, so old and new extractions
+# coexist on disk and a run picks one with extract.prompt_version.
+#   v3          original
+#   v3-detail   values must keep the stated detail (the 27% of look-up-able answers v3 dropped)
+#   v3-detail1  v3-detail + record the assistant's concrete recommendations. Measured on 228 sessions:
+#               facts 7.7 -> 12.9 per session, 43% of them assistant-spoken, output +30% -- too much
+#               store pressure for 11 dev questions; kept for reference, not used.
+PROMPT_VARIANTS = {
+    "v3": "",
+    "v3-detail": """The value MUST keep the specific number, time, date, quantity, ratio, price, name or title the speaker
+stated -- "3:1", "6:30 pm", "February 14th", "$495", "Golden Retriever", "The Glass Menagerie" -- never
+a generalisation of it ("experimenting with ratios", "evening", "a breed"). If the user gives a
+detail, the detail is the value. A fact without its detail is worthless later.
+""",
+    "v3-detail1": """The value MUST keep the specific number, time, date, quantity, ratio, price, name or title the speaker
+stated -- "3:1", "6:30 pm", "February 14th", "$495", "Golden Retriever", "The Glass Menagerie" -- never
+a generalisation of it ("experimenting with ratios", "evening", "a breed"). If the user gives a
+detail, the detail is the value. A fact without its detail is worthless later.
+Also record the assistant's CONCRETE recommendations the user asked for and reacted to (a named
+place, title, product, amount or instruction): entity = the thing, kind = "stated", speaker = "assistant".
+""",
+}
+
+
+def system_prompt(variant: str, date: str, attributes: str) -> str:
+    return SYSTEM_PROMPT.format(date=date, attributes=attributes, detail_rules=PROMPT_VARIANTS[variant])
+
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'(])")
 _FIRST_PERSON = re.compile(r"\b(i|i'm|i've|i'd|i'll|my|me|we|our|mine)\b", re.IGNORECASE)
@@ -264,12 +286,14 @@ class HeuristicExtractor:
 class LLMExtractor:
     def __init__(self, llm: LLM, cache_dir: str | Path | None = None, constrained_decoding: bool = True,
                  max_episode_tokens: int = 60, max_turn_tokens: int = 2000,
-                 max_output_tokens: int = 4096, loop_retry_temperature: float = 0.6):
+                 max_output_tokens: int = 4096, loop_retry_temperature: float = 0.6,
+                 prompt_version: str = PROMPT_VERSION):
         self.llm = llm
         self.constrained_decoding = constrained_decoding
         self.max_episode_tokens = max_episode_tokens
         self.max_turn_tokens = max_turn_tokens
         self.max_output_tokens = max_output_tokens
+        self.prompt_version = prompt_version
         self.loop_retry_temperature = loop_retry_temperature
         self.cache = DiskCache(cache_dir) if cache_dir else None
         self.fallback = HeuristicExtractor(max_episode_tokens)
@@ -283,9 +307,9 @@ class LLMExtractor:
         self.n_loop_fixed = 0      # ...and the sampled retry was not
 
     def extract(self, session: Session) -> ExtractionResult:
-        key = DiskCache.key("extract", PROMPT_VERSION, self.llm.model, self.constrained_decoding,
+        key = DiskCache.key("extract", self.prompt_version, self.llm.model, self.constrained_decoding,
                             self.max_turn_tokens, session.session_id, session.content_hash())
-        system = SYSTEM_PROMPT.format(date=session.ts.strftime("%Y-%m-%d"),
+        system = system_prompt(self.prompt_version, session.ts.strftime("%Y-%m-%d"),
                                       attributes=", ".join(f'"{k}" ({v})' for k, v in CANONICAL_ATTRIBUTES.items()))
         user = _render_session(session, self.max_turn_tokens)
         schema = EXTRACTION_SCHEMA if self.constrained_decoding else None

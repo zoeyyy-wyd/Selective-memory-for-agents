@@ -17,7 +17,7 @@ from smem.coverage import CoverageState, budgeted_greedy
 from smem.embed import Embedder, tokenize
 from smem.hawkes import HawkesIntensity, hawkes_keys
 from smem.llm import LLM
-from smem.schemas import Entry, Fact
+from smem.schemas import Entry, Episode, Fact, RawTurn
 from smem.store import MemoryStore
 from smem.temporal import TemporalConstraint, parse_temporal
 
@@ -49,6 +49,8 @@ class ReadResult:
     top_rel: float
     hop2_budget: int = 0
     diagnostics: dict = field(default_factory=dict)
+    excerpts: list[RawTurn] = field(default_factory=list)   # verbatim source turns of the packed entries
+    raw_tokens: int = 0
 
     @property
     def packed_ids(self) -> set[str]:
@@ -90,10 +92,51 @@ class Reader:
             self.store.touch(e.id, now)
             hit_keys.update(hawkes_keys(e))
         self.hawkes.observe_many(sorted(hit_keys), now)
+        excerpts = self._expand_sources(packed, packed_rel) if self.cfg.budget.raw_tokens > 0 else []
         return ReadResult(question=question, constraint=constraint, queries=queries, candidates=cands,
                           packed=packed, packed_rel=packed_rel, tokens=tokens, abstain=abstain,
-                          top_rel=top_rel, hop2_budget=hop2_budget,
+                          top_rel=top_rel, hop2_budget=hop2_budget, excerpts=excerpts,
+                          raw_tokens=sum(t.tokens for t in excerpts),
                           diagnostics={"n_candidates": len(cands), "n_hop2": sum(1 for c in cands if c.hop == 2)})
+
+    # ---- source expansion ----------------------------------------------------------------------
+    def _expand_sources(self, packed: list[Entry], packed_rel: dict[str, float]) -> list[RawTurn]:
+        """Verbatim turns behind the packed entries, under budget.raw_tokens. A turn scores the summed
+        relevance of the entries extracted from it (neighbouring turns at half weight, so an assistant
+        reply comes along with the user turn that cites it). Every session with a hit keeps its best
+        turn before any session takes a second one, so multi-session questions are not crowded out."""
+        score: dict[tuple[str, int], float] = {}
+        for e in packed:
+            rel = packed_rel.get(e.id, 0.0) + 1e-3
+            locs: list[tuple[str, int]] = []
+            if isinstance(e, Episode):
+                locs.append((e.session_id, e.turn_idx))
+            else:
+                for sid in e.sources:
+                    src = self.store.get(sid)
+                    if isinstance(src, Episode):
+                        locs.append((src.session_id, src.turn_idx))
+            for s, i in locs:
+                for j, w in ((i, 1.0), (i - 1, 0.5), (i + 1, 0.5)):
+                    if self.store.turn(s, j) is not None:
+                        score[(s, j)] = score.get((s, j), 0.0) + rel * w
+        ranked = sorted(score, key=lambda k: -score[k])
+        order = ranked
+        if self.r.raw_diversity > 0:
+            first: dict[str, tuple[str, int]] = {}
+            for k in ranked:
+                if len(first) < self.r.raw_diversity:
+                    first.setdefault(k[0], k)
+            head = list(first.values())
+            order = head + [k for k in ranked if k not in set(head)]
+        chosen: list[RawTurn] = []
+        used = 0
+        for k in order:
+            t = self.store.turn(*k)
+            if t is None or used + t.tokens > self.cfg.budget.raw_tokens:
+                continue
+            chosen.append(t); used += t.tokens
+        return sorted(chosen, key=lambda t: (t.ts, t.session_id, t.turn_idx))
 
     # ---- rewriting -----------------------------------------------------------------------------
     def rewrite(self, question: str) -> list[str]:

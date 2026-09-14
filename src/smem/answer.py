@@ -15,6 +15,22 @@ from smem.schemas import Entry, Fact
 ABSTAIN_TEXT = "I don't know."
 _CITE_RE = re.compile(r"\[((?:ep|f|fs)_[0-9a-f]{6,})\]")
 
+# Answering-prompt variants. "strict" is the original; larger readers (gpt-4.1, gpt-4o) abstained on a
+# quarter of answerable questions under it and scored 10 points below gpt-4.1-mini. "grounded" keeps the
+# no-outside-knowledge rule but abstains only when nothing relevant was injected.
+ANSWER_PROMPTS = {
+    "strict": None,     # filled below with ANSWER_SYSTEM
+    "grounded": """You answer a question about a user using the memory entries provided.
+Rules:
+- Base the answer on the entries. Do not use outside knowledge about the user.
+- If the entries contain information that answers the question, even partially, give the best answer they
+  support and cite the ids of the entries you relied on in square brackets, e.g. [ep_1a2b3c4d5e].
+- Entries are ordered by time. Facts may have a validity window "valid from X to Y"; pick the version that
+  matches the time the question asks about. "now" means the latest version.
+- Only if none of the entries are relevant to the question, reply exactly: I don't know.
+- Be concise: one or two sentences.""",
+}
+
 ANSWER_SYSTEM = """You answer a question about a user using only the memory entries provided.
 Rules:
 - Use only the entries. Do not use outside knowledge and do not guess.
@@ -23,6 +39,9 @@ Rules:
   matches the time the question asks about. "now" means the latest version.
 - If the entries do not contain the answer, reply exactly: I don't know.
 - Be concise: one or two sentences."""
+
+
+ANSWER_PROMPTS["strict"] = ANSWER_SYSTEM
 
 
 def format_entry(e: Entry) -> str:
@@ -39,6 +58,11 @@ def format_context(entries: list[Entry]) -> str:
     return "\n".join(format_entry(e) for e in ordered)
 
 
+def format_excerpts(result: ReadResult) -> str:
+    return "\n".join(f"[{t.session_id}#{t.turn_idx}] ({t.ts.strftime('%Y-%m-%d')}; {t.speaker}) {t.text}"
+                     for t in result.excerpts)
+
+
 def check_citations(answer: str, injected_ids: set[str]) -> tuple[list[str], list[str]]:
     cited = _CITE_RE.findall(answer)
     valid = [c for c in cited if c in injected_ids]
@@ -51,16 +75,19 @@ class Answerer(Protocol):
 
 
 class LLMAnswerer:
-    def __init__(self, llm: LLM, max_tokens: int = 300):
+    def __init__(self, llm: LLM, max_tokens: int = 300, prompt_version: str = "strict"):
         self.llm = llm
         self.max_tokens = max_tokens
+        self.system = ANSWER_PROMPTS[prompt_version]
 
     def answer(self, question: str, result: ReadResult, now: datetime) -> str:
         if result.abstain or not result.packed:
             return ABSTAIN_TEXT
-        user = (f"Current date: {now.strftime('%Y-%m-%d')}\n\nMemory entries:\n{format_context(result.packed)}\n\n"
-                f"Question: {question}")
-        return self.llm.complete(ANSWER_SYSTEM, user, max_tokens=self.max_tokens).strip()
+        user = f"Current date: {now.strftime('%Y-%m-%d')}\n\nMemory entries:\n{format_context(result.packed)}\n\n"
+        if result.excerpts:
+            user += f"Conversation excerpts (verbatim source of the entries above):\n{format_excerpts(result)}\n\n"
+        user += f"Question: {question}"
+        return self.llm.complete(self.system, user, max_tokens=self.max_tokens).strip()
 
 
 class ExtractiveAnswerer:

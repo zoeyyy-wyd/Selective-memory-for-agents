@@ -1,0 +1,135 @@
+{
+ "n": 34,
+ "n_judged": 34,
+ "accuracy": {
+  "mean": 0.5882352941176471,
+  "lo": 0.4117647058823529,
+  "hi": 0.7647058823529411,
+  "n": 34
+ },
+ "accuracy_by_type": {
+  "knowledge-update": {
+   "mean": 0.6,
+   "lo": 0.2,
+   "hi": 1.0,
+   "n": 5
+  },
+  "multi-session": {
+   "mean": 0.5,
+   "lo": 0.125,
+   "hi": 0.875,
+   "n": 8
+  },
+  "multi-session_abs": {
+   "mean": 1.0,
+   "lo": 1.0,
+   "hi": 1.0,
+   "n": 1
+  },
+  "single-session-assistant": {
+   "mean": 0.25,
+   "lo": 0.0,
+   "hi": 0.75,
+   "n": 4
+  },
+  "single-session-preference": {
+   "mean": 1.0,
+   "lo": 1.0,
+   "hi": 1.0,
+   "n": 2
+  },
+  "single-session-user": {
+   "mean": 0.6,
+   "lo": 0.2,
+   "hi": 1.0,
+   "n": 5
+  },
+  "temporal-reasoning": {
+   "mean": 0.625,
+   "lo": 0.25,
+   "hi": 1.0,
+   "n": 8
+  },
+  "temporal-reasoning_abs": {
+   "mean": 1.0,
+   "lo": 1.0,
+   "hi": 1.0,
+   "n": 1
+  }
+ },
+ "evidence_write_rate": {
+  "mean": 0.8576999227822881,
+  "lo": 0.7768878614607903,
+  "hi": 0.923866870725954,
+  "n": 31
+ },
+ "evidence_survival_rate": {
+  "mean": 0.8489229219242078,
+  "lo": 0.7697114329602809,
+  "hi": 0.9151269772987701,
+  "n": 31
+ },
+ "evidence_survival_rate_strict": {
+  "mean": 0.8489229219242078,
+  "lo": 0.7697114329602809,
+  "hi": 0.9151269772987701,
+  "n": 31
+ },
+ "evidence_injection_rate": {
+  "mean": 0.5160673923770283,
+  "lo": 0.4457914756392807,
+  "hi": 0.583668539617102,
+  "n": 31
+ },
+ "correct_abstention_rate": {
+  "mean": 0.0,
+  "lo": 0.0,
+  "hi": 0.0,
+  "n": 2
+ },
+ "false_abstention_rate": {
+  "mean": 0.125,
+  "lo": 0.03125,
+  "hi": 0.25,
+  "n": 32
+ },
+ "tokens_per_query": {
+  "mean": 1162.3529411764705,
+  "lo": 1086.735294117647,
+  "hi": 1244.5588235294117,
+  "n": 34
+ },
+ "entries_per_query": {
+  "mean": 71.58823529411765,
+  "lo": 68.05882352941177,
+  "hi": 75.8529411764706,
+  "n": 34
+ },
+ "store_tokens": {
+  "mean": 7868.176470588235,
+  "lo": 7634.85294117647,
+  "hi": 8123.941176470588,
+  "n": 34
+ },
+ "store_fraction": {
+  "mean": 0.07610232327720486,
+  "lo": 0.07391510189764271,
+  "hi": 0.07855616708862838,
+  "n": 34
+ },
+ "invalid_citation_rate": {
+  "mean": 0.0,
+  "lo": 0.0,
+  "hi": 0.0,
+  "n": 34
+ },
+ "run_id": "fc1ae26d0675",
+ "elapsed_s": 809.0319905281067,
+ "config_hash": "0fb3f5a038a7",
+ "overrides": {
+  "models.embed_device": "cpu",
+  "extract.prompt_version": "v3",
+  "consolidation.policy": "no_consolidation",
+  "budget.read_tokens": 2000
+ }
+}

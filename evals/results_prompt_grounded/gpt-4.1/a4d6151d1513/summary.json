@@ -1,0 +1,148 @@
+{
+ "n": 100,
+ "n_judged": 100,
+ "accuracy": {
+  "mean": 0.55,
+  "lo": 0.45,
+  "hi": 0.64,
+  "n": 100
+ },
+ "accuracy_by_type": {
+  "knowledge-update": {
+   "mean": 0.6,
+   "lo": 0.3333333333333333,
+   "hi": 0.8,
+   "n": 15
+  },
+  "knowledge-update_abs": {
+   "mean": 1.0,
+   "lo": 1.0,
+   "hi": 1.0,
+   "n": 1
+  },
+  "multi-session": {
+   "mean": 0.4166666666666667,
+   "lo": 0.25,
+   "hi": 0.625,
+   "n": 24
+  },
+  "multi-session_abs": {
+   "mean": 1.0,
+   "lo": 1.0,
+   "hi": 1.0,
+   "n": 3
+  },
+  "single-session-assistant": {
+   "mean": 0.2727272727272727,
+   "lo": 0.0,
+   "hi": 0.5454545454545454,
+   "n": 11
+  },
+  "single-session-preference": {
+   "mean": 0.3333333333333333,
+   "lo": 0.0,
+   "hi": 0.6666666666666666,
+   "n": 6
+  },
+  "single-session-user": {
+   "mean": 0.6153846153846154,
+   "lo": 0.38461538461538464,
+   "hi": 0.8461538461538461,
+   "n": 13
+  },
+  "single-session-user_abs": {
+   "mean": 1.0,
+   "lo": 1.0,
+   "hi": 1.0,
+   "n": 1
+  },
+  "temporal-reasoning": {
+   "mean": 0.68,
+   "lo": 0.48,
+   "hi": 0.84,
+   "n": 25
+  },
+  "temporal-reasoning_abs": {
+   "mean": 1.0,
+   "lo": 1.0,
+   "hi": 1.0,
+   "n": 1
+  }
+ },
+ "evidence_write_rate": {
+  "mean": 0.8914331101304686,
+  "lo": 0.8567369737794017,
+  "hi": 0.920582181523706,
+  "n": 93
+ },
+ "evidence_survival_rate": {
+  "mean": 0.881639923977266,
+  "lo": 0.8462031327371985,
+  "hi": 0.9108593049050359,
+  "n": 93
+ },
+ "evidence_survival_rate_strict": {
+  "mean": 0.881639923977266,
+  "lo": 0.8462031327371985,
+  "hi": 0.9108593049050359,
+  "n": 93
+ },
+ "evidence_injection_rate": {
+  "mean": 0.5739866295429136,
+  "lo": 0.5357437997814198,
+  "hi": 0.6150491495311949,
+  "n": 93
+ },
+ "correct_abstention_rate": {
+  "mean": 0.5,
+  "lo": 0.16666666666666666,
+  "hi": 0.8333333333333334,
+  "n": 6
+ },
+ "false_abstention_rate": {
+  "mean": 0.18085106382978725,
+  "lo": 0.10638297872340426,
+  "hi": 0.2553191489361702,
+  "n": 94
+ },
+ "tokens_per_query": {
+  "mean": 1313.47,
+  "lo": 1242.56,
+  "hi": 1390.02,
+  "n": 100
+ },
+ "entries_per_query": {
+  "mean": 76.67,
+  "lo": 73.59,
+  "hi": 80.15,
+  "n": 100
+ },
+ "store_tokens": {
+  "mean": 9316.59,
+  "lo": 9109.7,
+  "hi": 9560.93,
+  "n": 100
+ },
+ "store_fraction": {
+  "mean": 0.09032238692681205,
+  "lo": 0.08836072815938051,
+  "hi": 0.09264991388142314,
+  "n": 100
+ },
+ "invalid_citation_rate": {
+  "mean": 0.01,
+  "lo": 0.0,
+  "hi": 0.03,
+  "n": 100
+ },
+ "run_id": "a4d6151d1513",
+ "elapsed_s": 650.7397651672363,
+ "config_hash": "74bb800ec36b",
+ "overrides": {
+  "consolidation.policy": "no_consolidation",
+  "models.embed_device": "cpu",
+  "models.answer_prompt_version": "grounded",
+  "models.answer_model": "gpt-4.1",
+  "budget.read_tokens": 2000
+ }
+}

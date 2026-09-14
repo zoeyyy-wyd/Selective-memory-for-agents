@@ -1,0 +1,142 @@
+{
+ "n": 33,
+ "n_judged": 33,
+ "accuracy": {
+  "mean": 0.48484848484848486,
+  "lo": 0.30303030303030304,
+  "hi": 0.6666666666666666,
+  "n": 33
+ },
+ "accuracy_by_type": {
+  "knowledge-update": {
+   "mean": 0.6,
+   "lo": 0.2,
+   "hi": 1.0,
+   "n": 5
+  },
+  "knowledge-update_abs": {
+   "mean": 0.0,
+   "lo": 0.0,
+   "hi": 0.0,
+   "n": 1
+  },
+  "multi-session": {
+   "mean": 0.2857142857142857,
+   "lo": 0.0,
+   "hi": 0.7142857142857143,
+   "n": 7
+  },
+  "multi-session_abs": {
+   "mean": 1.0,
+   "lo": 1.0,
+   "hi": 1.0,
+   "n": 2
+  },
+  "single-session-assistant": {
+   "mean": 0.6666666666666666,
+   "lo": 0.0,
+   "hi": 1.0,
+   "n": 3
+  },
+  "single-session-preference": {
+   "mean": 0.5,
+   "lo": 0.0,
+   "hi": 1.0,
+   "n": 2
+  },
+  "single-session-user": {
+   "mean": 0.5,
+   "lo": 0.0,
+   "hi": 1.0,
+   "n": 4
+  },
+  "single-session-user_abs": {
+   "mean": 1.0,
+   "lo": 1.0,
+   "hi": 1.0,
+   "n": 1
+  },
+  "temporal-reasoning": {
+   "mean": 0.375,
+   "lo": 0.125,
+   "hi": 0.75,
+   "n": 8
+  }
+ },
+ "evidence_write_rate": {
+  "mean": 0.8510025857346257,
+  "lo": 0.7934823402111617,
+  "hi": 0.9010310282269172,
+  "n": 29
+ },
+ "evidence_survival_rate": {
+  "mean": 0.397020983761072,
+  "lo": 0.3321412568625785,
+  "hi": 0.4749057229775509,
+  "n": 29
+ },
+ "evidence_survival_rate_strict": {
+  "mean": 0.397020983761072,
+  "lo": 0.3321412568625785,
+  "hi": 0.4749057229775509,
+  "n": 29
+ },
+ "evidence_injection_rate": {
+  "mean": 0.33182788150669595,
+  "lo": 0.27410245692921353,
+  "hi": 0.40364781035571135,
+  "n": 29
+ },
+ "correct_abstention_rate": {
+  "mean": 0.75,
+  "lo": 0.25,
+  "hi": 1.0,
+  "n": 4
+ },
+ "false_abstention_rate": {
+  "mean": 0.3793103448275862,
+  "lo": 0.20689655172413793,
+  "hi": 0.5517241379310345,
+  "n": 29
+ },
+ "tokens_per_query": {
+  "mean": 700.1212121212121,
+  "lo": 660.3333333333334,
+  "hi": 741.7272727272727,
+  "n": 33
+ },
+ "entries_per_query": {
+  "mean": 67.51515151515152,
+  "lo": 64.36363636363636,
+  "hi": 71.27272727272727,
+  "n": 33
+ },
+ "store_tokens": {
+  "mean": 1543.6969696969697,
+  "lo": 1537.3636363636363,
+  "hi": 1549.7272727272727,
+  "n": 33
+ },
+ "store_fraction": {
+  "mean": 0.014943978927579057,
+  "lo": 0.014925343399647588,
+  "hi": 0.014957992301311854,
+  "n": 33
+ },
+ "invalid_citation_rate": {
+  "mean": 0.0,
+  "lo": 0.0,
+  "hi": 0.0,
+  "n": 33
+ },
+ "run_id": "28492f60fc8a",
+ "elapsed_s": 2860.612441301346,
+ "config_hash": "f994d65f6849",
+ "overrides": {
+  "evict.policy": "swap",
+  "consolidation.policy": "no_consolidation",
+  "models.embed_device": "cpu",
+  "extract.prompt_version": "v3-detail",
+  "budget.read_tokens": 2000
+ }
+}

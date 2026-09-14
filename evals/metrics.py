@@ -36,6 +36,7 @@ class QuestionRecord:
     n_injected: int = 0
     injected_tokens: int = 0
     injected_entries: int = 0
+    raw_tokens: int = 0
     store_tokens: int = 0
     store_entries: int = 0
     history_tokens: int = 0

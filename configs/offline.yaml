@@ -15,5 +15,6 @@ read:
 extract:
   backend: heuristic
 models:
+  ingest_cache_dir: null          # tests and dry runs never write the shared ingest cache
   embedder: hash
   nli_model: lexical

@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
                     cfg.extract.constrained_decoding, extra_body=extract_extra_body(cfg))
     extractor = LLMExtractor(llm, cfg.extract.cache_dir, cfg.extract.constrained_decoding,
                              cfg.extract.max_episode_tokens, max_turn_tokens=cfg.extract.max_turn_tokens,
-                             max_output_tokens=cfg.extract.max_output_tokens,
+                             max_output_tokens=cfg.extract.max_output_tokens, prompt_version=cfg.extract.prompt_version,
                              loop_retry_temperature=cfg.extract.loop_retry_temperature)
     print(f"{len(questions)} questions -> {len(sessions)} unique sessions; model {cfg.models.extract_model} "
           f"@ {cfg.models.extract_base_url or 'api.openai.com'}; constrained={cfg.extract.constrained_decoding}")

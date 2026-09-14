@@ -14,7 +14,7 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 
 from smem.embed import tokenize
-from smem.schemas import Entry, Episode, Fact
+from smem.schemas import RawTurn, Entry, Episode, Fact
 
 try:  # pragma: no cover
     import faiss  # type: ignore
@@ -99,6 +99,10 @@ CREATE TABLE IF NOT EXISTS facts (
     access_count INTEGER, last_access TEXT, embedding BLOB
 );
 CREATE INDEX IF NOT EXISTS facts_ea ON facts(entity, attribute);
+CREATE TABLE IF NOT EXISTS turns (
+    session_id TEXT, turn_idx INTEGER, ts TEXT, speaker TEXT, text TEXT, tokens INTEGER,
+    PRIMARY KEY (session_id, turn_idx)
+);
 """
 
 
@@ -121,9 +125,36 @@ class MemoryStore:
         self._dirty = True
         self._insert_order: dict[str, int] = {}
         self._counter = 0
+        self.turns: dict[tuple[str, int], RawTurn] = {}
         self._load()
 
     # ---- persistence ---------------------------------------------------------------------------
+    def dump_to(self, path: str) -> None:
+        """Copy the live database (including :memory:) to a file."""
+        import os
+        if os.path.exists(path):
+            os.remove(path)
+        self.db.commit()   # backup() retries forever (sleeping) while the source has an open transaction
+        dest = sqlite3.connect(path)
+        with dest:
+            self.db.backup(dest)
+        dest.close()
+
+    def restore_from(self, path: str) -> None:
+        """Replace the contents of this store with a saved database and rebuild every in-memory
+        index from it. Reads from a private in-memory copy so later writes never touch the file."""
+        src = sqlite3.connect(path)
+        self.db.close()
+        self.db = sqlite3.connect(":memory:")
+        with self.db:
+            src.backup(self.db)
+        src.close()
+        self.episodes.clear(); self.facts.clear(); self.vectors = VectorIndex(self.dim)
+        self._entity_index.clear(); self._pred.clear(); self._bm25 = None; self._bm25_ids = []
+        self._insert_order.clear(); self._counter = 0; self._dirty = True; self.turns.clear()
+        self.db.executescript(_SCHEMA)   # older dumps predate the turns table
+        self._load()
+
     def _load(self) -> None:
         for row in self.db.execute("SELECT * FROM episodes"):
             ep = Episode(
@@ -140,6 +171,21 @@ class MemoryStore:
                 embedding=np.frombuffer(row[14], dtype=np.float32).tolist(),
             )
             self._index(f)
+
+        for row in self.db.execute("SELECT session_id, turn_idx, ts, speaker, text, tokens FROM turns"):
+            t = RawTurn(session_id=row[0], turn_idx=row[1], ts=_dt(row[2]), speaker=row[3], text=row[4], tokens=row[5])
+            self.turns[(t.session_id, t.turn_idx)] = t
+
+    # ---- raw turns (payload, not entries) -----------------------------------------------------
+    def add_turns(self, turns: Iterable[RawTurn]) -> None:
+        rows = []
+        for t in turns:
+            self.turns[(t.session_id, t.turn_idx)] = t
+            rows.append((t.session_id, t.turn_idx, t.ts.isoformat(), t.speaker, t.text, t.tokens))
+        self.db.executemany("INSERT OR REPLACE INTO turns VALUES (?, ?, ?, ?, ?, ?)", rows)
+
+    def turn(self, session_id: str, turn_idx: int) -> RawTurn | None:
+        return self.turns.get((session_id, turn_idx))
 
     def _write(self, e: Entry) -> None:
         emb = np.asarray(e.embedding, dtype=np.float32).tobytes()

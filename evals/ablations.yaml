@@ -33,3 +33,28 @@ groups:
 # the swap churn and no survival gain. Frozen at 3e-4 for every ablation and for the test split.
 calibration:
   sieve_min_threshold: 0.0003
+
+# Extraction prompt (2026-09-14). Reference runs, store unbounded, gpt-4.1-mini reader, gpt-4o judge, no
+# consolidation, 100 dev questions:
+#   v3          0.52 accuracy   (temporal 0.52, knowledge-update 0.73, single-session-assistant 0.18)
+#   v3-detail   0.57            (temporal 0.76, knowledge-update 0.80, single-session-assistant 0.36;
+#                                multi-session 0.50 -> 0.42, preference 0.50 -> 0.17 on n=6)
+# 17 questions flipped wrong->right, 12 right->wrong: +5 is inside the noise of 100 questions, but the
+# gains sit exactly where the change aims (dates, times, numbers kept in fact values) and it costs
+# nothing at read time, so v3-detail is the default. The regressions are mostly counting questions
+# where the reader now sees several per-session numbers and picks the wrong one.
+extraction_prompt:
+  default: v3-detail
+
+# Reader and answering prompt (2026-09-14, store unbounded, v3-detail, no consolidation, gpt-4o judge):
+#   reader        prompt     accuracy  answerable abstained  unanswerable abstained
+#   gpt-4.1-mini  strict     0.57      0.14                  3/6
+#   gpt-4.1-mini  grounded   0.54      0.07                  0/6
+#   gpt-4.1       strict     0.48      0.24                  6/6
+#   gpt-4.1       grounded   0.55      0.12                  3/6
+#   gpt-4o        strict     0.48      0.29                  6/6
+# Larger readers over-abstain under the strict prompt and lose ~10 points to gpt-4.1-mini; the softer
+# "grounded" prompt brings gpt-4.1 back to parity. Once abstention is calibrated every reader lands at
+# 0.55-0.57: the reader is not the ceiling, extraction and retrieval are. Kept: gpt-4.1-mini + strict.
+reader:
+  default: {model: gpt-4.1-mini, prompt: strict}

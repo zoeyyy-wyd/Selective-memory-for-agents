@@ -39,6 +39,17 @@ class Session(BaseModel):
         return h.hexdigest()[:16]
 
 
+class RawTurn(BaseModel):
+    """One verbatim conversation turn kept alongside the extracted entries (write.keep_raw_turns).
+    Never retrieved on its own: the read path reaches it through the entries extracted from it."""
+    session_id: str
+    turn_idx: int
+    ts: datetime
+    speaker: Speaker
+    text: str
+    tokens: int = 0
+
+
 class Episode(BaseModel):
     id: str
     ts: datetime
@@ -103,6 +114,7 @@ Entry = Episode | Fact
 class Budget(BaseModel):
     store_tokens: int = 10**9   # B; the default is effectively unbounded
     read_tokens: int = 2000     # R
+    raw_tokens: int = 0         # verbatim source turns handed to the reader on top of R; 0 = off
     consolidate_every: int = 5  # N sessions, used only by the fixed_interval control
 
 

@@ -70,3 +70,53 @@ def test_persistent_store_roundtrip(tmp_path, worked_example):
 
     reloaded = MemoryStore(mem.embedder.dim, str(tmp_path / "m.sqlite"))
     assert len(reloaded) == n
+
+
+def test_ingest_cache_round_trip_is_exact(worked_example, tmp_path):
+    """save_state after ingest, load_state into a fresh system: identical store, selection, evidence
+    bookkeeping and read result. This is what lets read-side runs skip ingest entirely."""
+    a = build(sessions=worked_example)
+    a.save_state(tmp_path / "s")
+    b = build(sessions=[])                 # fresh system, nothing ingested
+    b.load_state(tmp_path / "s")
+    assert b.writer.active_ids() == a.writer.active_ids()
+    assert set(b.store.facts) == set(a.store.facts) and set(b.store.episodes) == set(a.store.episodes)
+    assert b.writer.written_ids == a.writer.written_ids and b.candidate_origin == a.candidate_origin
+    assert b.stats() == a.stats()
+    now = T0 + timedelta(days=120)
+    ra, rb = a.ask("Where did I live in March?", now), b.ask("Where did I live in March?", now)
+    assert rb.injected_ids == ra.injected_ids and rb.answer == ra.answer
+    chain = b.store.chain(next(f.id for f in b.store.facts.values() if f.value == "Boston"))
+    assert [f.value for f in chain] == ["Boston", "Seattle"]      # chain pointers survived the round trip
+
+
+def test_ingest_key_ignores_read_side_settings():
+    from smem.config import SystemConfig
+
+    base = SystemConfig.load("configs/offline.yaml")
+    same = base.with_overrides({"read.packing": "topk", "budget.read_tokens": 500, "models.answer_model": "x",
+                                "models.judge_model": "y", "read.tau_abs": 0.9})
+    diff = base.with_overrides({"evict.policy": "fifo"})
+    assert same.ingest_key("q1") == base.ingest_key("q1")
+    assert diff.ingest_key("q1") != base.ingest_key("q1") and base.ingest_key("q2") != base.ingest_key("q1")
+
+
+def test_raw_turns_reach_the_reader_and_survive_the_cache(worked_example, tmp_path):
+    """write.keep_raw_turns stores every verbatim turn; budget.raw_tokens>0 hands the reader the source
+    turns of the packed entries (neighbours included), under that budget, and they survive save/load."""
+    now = T0 + timedelta(days=120)
+    off = build(sessions=worked_example)
+    assert off.ask("Where did I live in March?", now).read.excerpts == []      # default: off, identity unchanged
+    on = build(sessions=worked_example, cfg_overrides={"write.keep_raw_turns": True, "budget.raw_tokens": 120})
+    assert len(on.store.turns) == sum(len(s.turns) for s in worked_example)
+    r = on.ask("Where did I live in March?", now).read
+    assert r.excerpts and r.raw_tokens <= 120 and any("Boston" in t.text for t in r.excerpts)
+    assert r.raw_tokens == sum(t.tokens for t in r.excerpts)
+    on.save_state(tmp_path / "s")
+    again = build(sessions=[], cfg_overrides={"write.keep_raw_turns": True, "budget.raw_tokens": 120})
+    again.load_state(tmp_path / "s")
+    assert again.store.turns == on.store.turns
+    assert [(t.session_id, t.turn_idx) for t in again.ask("Where did I live in March?", now).read.excerpts] == \
+           [(t.session_id, t.turn_idx) for t in r.excerpts]
+    assert on.cfg.ingest_key("q") != off.cfg.ingest_key("q")                     # flipping it re-ingests
+    assert on.cfg.with_overrides({"budget.raw_tokens": 0}).ingest_key("q") == on.cfg.ingest_key("q")  # read-side

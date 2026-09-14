@@ -18,6 +18,7 @@ import numpy as np
 
 from smem.config import SystemConfig
 from smem.embed import Embedder, tokenize
+from smem.extract import CANONICAL_ATTRIBUTES, canonical_attribute
 from smem.llm import LLM, parse_json_object
 from smem.schemas import Episode, Fact, make_id
 from smem.store import MemoryStore
@@ -85,7 +86,9 @@ class LLMSummarizer:
         out = []
         for item in obj["facts"][:3]:
             try:
-                attr = re.sub(r"[^a-z0-9_]+", "_", str(item["attribute"]).lower()).strip("_") or "summary"
+                raw_attr = re.sub(r"[^a-z0-9_]+", "_", str(item["attribute"]).lower()).strip("_") or "summary"
+                canon = canonical_attribute(raw_attr)
+                attr = canon if canon in CANONICAL_ATTRIBUTES and canon != "other" else raw_attr
                 out.append(_summary_fact(str(item["entity"]) or "user", attr, str(item["value"]), members))
             except (KeyError, TypeError):
                 self.n_schema_errors += 1
@@ -136,8 +139,16 @@ class CrossEncoderNLI:
         return 0.0
 
 
+_NLI_CACHE: dict[tuple[str, str | None], CrossEncoderNLI] = {}
+
+
 def get_nli(name: str, device: str | None = None) -> NLI:
-    return LexicalNLI() if name == "lexical" else CrossEncoderNLI(name, device=device)
+    if name == "lexical":
+        return LexicalNLI()
+    key = (name, device)   # stateless model: load once per process, not once per question
+    if key not in _NLI_CACHE:
+        _NLI_CACHE[key] = CrossEncoderNLI(name, device=device)
+    return _NLI_CACHE[key]
 
 
 # ---- consolidator ------------------------------------------------------------------------------
@@ -206,16 +217,28 @@ class Consolidator:
         if not facts:
             self.stats.summaries_rejected += 1
             return
-        summary_text = " ".join(f.text for f in facts)
-        if self.c.policy != "no_nli_check":
+        if self.c.policy == "no_nli_check":
+            rate = 1.0
+        elif self.c.nli_direction == "summary_supported":
+            # Hallucination check in the right direction: a summary fact is kept only if at least one
+            # member (premise) entails it (hypothesis). The summary as a whole passes when enough of
+            # its facts are supported; the unsupported ones are dropped rather than sinking the rest.
+            supported = [max(self.nli.entails(e.text, f.text) for e in eps) >= 0.5 for f in facts]
+            rate = sum(supported) / len(facts)
+            facts = [f for f, ok in zip(facts, supported) if ok]
+            if rate < self.c.nli_threshold or not facts:
+                self.stats.summaries_rejected += 1
+                self.log.append({"accepted": False, "rate": rate, "members": [e.id for e in eps]})
+                return
+        else:
+            # original rule: the summary (premise) must entail each member (hypothesis)
+            summary_text = " ".join(f.text for f in facts)
             entailed = sum(1 for e in eps if self.nli.entails(summary_text, e.text) >= 0.5)
             rate = entailed / len(eps)
             if rate < self.c.nli_threshold:
                 self.stats.summaries_rejected += 1
                 self.log.append({"accepted": False, "rate": rate, "members": [e.id for e in eps]})
                 return
-        else:
-            rate = 1.0
         self.stats.summaries_accepted += 1
         fvecs = self.embedder.encode([f.text for f in facts])
         admitted_any = False

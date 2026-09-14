@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 
@@ -26,7 +27,8 @@ from smem.extract import Extractor, HeuristicExtractor, LLMExtractor
 from smem.hawkes import HawkesIntensity
 from smem.llm import LLM, AnthropicLLM, OpenAICompatLLM
 from smem.read import Reader, ReadResult
-from smem.schemas import Fact, Session
+from smem.tokens import count_tokens
+from smem.schemas import RawTurn, Fact, Session
 from smem.store import MemoryStore, key_drift
 from smem.write import WritePolicy
 
@@ -92,6 +94,10 @@ class SelectiveMemory:
             self.schema_errors += 1
         self.now = session.ts
         self.session_ids.append(session.session_id)
+        if self.cfg.write.keep_raw_turns:
+            self.store.add_turns(RawTurn(session_id=session.session_id, turn_idx=i, ts=session.ts, speaker=t.role,
+                                         text=t.content.strip(), tokens=count_tokens(t.content))
+                                 for i, t in enumerate(session.turns))
         for ep in result.episodes:
             self.candidate_origin.setdefault(ep.id, (session.session_id, ep.turn_idx))
         for f in result.facts:
@@ -111,6 +117,40 @@ class SelectiveMemory:
         active = self.writer.active()
         return IngestReport(session.session_id, len(result.episodes), len(result.facts), admitted, result.schema_ok,
                             active.used, len(active.selected))
+
+    # ---- ingested-state cache -------------------------------------------------------------------
+    _COMPONENT_REFS = {
+        "writer": ("cfg", "store", "evictor", "hawkes"),
+        "consolidator": ("cfg", "c", "store", "writer", "embedder", "summarizer", "nli"),
+        "hawkes": (),
+    }
+    _SYSTEM_SKIP = ("cfg", "embedder", "extractor", "answerer", "store", "hawkes", "evictor", "writer",
+                    "consolidator", "reader")
+
+    def save_state(self, directory: str | Path) -> None:
+        """Persist everything ingest produced: the store as a sqlite file, the write / consolidation /
+        Hawkes bookkeeping and the evidence maps as a pickle. Models and clients are not saved."""
+        import pickle
+
+        d = Path(directory); d.mkdir(parents=True, exist_ok=True)
+        self.store.dump_to(str(d / "store.sqlite"))
+        state = {"system": {k: v for k, v in self.__dict__.items() if k not in self._SYSTEM_SKIP}}
+        for name, skip in self._COMPONENT_REFS.items():
+            state[name] = {k: v for k, v in getattr(self, name).__dict__.items() if k not in skip}
+        with open(d / "state.pkl", "wb") as f:
+            pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def load_state(self, directory: str | Path) -> None:
+        """Inverse of save_state onto a freshly built system (same config, same models)."""
+        import pickle
+
+        d = Path(directory)
+        self.store.restore_from(str(d / "store.sqlite"))
+        with open(d / "state.pkl", "rb") as f:
+            state = pickle.load(f)
+        self.__dict__.update(state["system"])
+        for name in self._COMPONENT_REFS:
+            getattr(self, name).__dict__.update(state[name])
 
     def ingest(self, sessions: list[Session]) -> list[IngestReport]:
         return [self.ingest_session(s) for s in sorted(sessions, key=lambda s: s.ts)]
@@ -210,7 +250,9 @@ def build_llm(model: str, base_url: str | None, cfg: SystemConfig, constrained: 
         raise RuntimeError(f"{api_key_env} is not set and {model} has no base_url; put the key in .env")
     return OpenAICompatLLM(model, base_url=base_url, api_key=api_key, cache_dir=cfg.models.llm_cache_dir,
                            constrained_decoding=constrained, schema_mode=cfg.models.schema_mode, extra_body=extra_body,
-                           max_retries=cfg.models.request_max_retries, timeout=cfg.models.request_timeout,
+                           max_retries=cfg.models.request_max_retries,
+                           timeout=(cfg.models.local_request_timeout if base_url and ("localhost" in base_url or "127.0.0.1" in base_url)
+                                    else cfg.models.request_timeout),
                            retry_attempts=cfg.models.retry_attempts, retry_base_delay=cfg.models.retry_base_delay,
                            retry_max_delay=cfg.models.retry_max_delay)
 
@@ -229,9 +271,10 @@ def build_system(cfg: SystemConfig, backend: str = "offline", store_path: str = 
         cfg,
         extractor=LLMExtractor(extract_llm, cfg.extract.cache_dir, constrained, cfg.extract.max_episode_tokens,
                                max_turn_tokens=cfg.extract.max_turn_tokens,
-                               max_output_tokens=cfg.extract.max_output_tokens,
+                               max_output_tokens=cfg.extract.max_output_tokens, prompt_version=cfg.extract.prompt_version,
                                loop_retry_temperature=cfg.extract.loop_retry_temperature),
-        answerer=LLMAnswerer(answer_llm, max_tokens=cfg.models.answer_max_tokens),
+        answerer=LLMAnswerer(answer_llm, max_tokens=cfg.models.answer_max_tokens,
+                             prompt_version=cfg.models.answer_prompt_version),
         summarizer=LLMSummarizer(extract_llm, constrained),
         rewriter=extract_llm,
         store_path=store_path,
