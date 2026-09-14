@@ -39,6 +39,10 @@ models:
   judge_model: gpt-4o                # official LongMemEval judge, dev and test alike; direct api.openai.com
   nli_model: cross-encoder/nli-deberta-v3-base
   llm_cache_dir: .cache/llm
+  request_timeout: 120.0            # a hung read must not stall a run for 10 min
+  request_max_retries: 2
+  retry_attempts: 6
+  answer_max_tokens: 300            # gpt-4.1-mini answers in ~50 tokens; no reasoning budget needed
   schema_mode: response_format          # OpenAI-style json_schema; vLLM routes it to xgrammar
   extract_extra_body:
     chat_template_kwargs: {enable_thinking: false}   # Qwen3 would otherwise emit <think> before the JSON

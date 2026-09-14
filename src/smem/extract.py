@@ -19,7 +19,7 @@ from smem.schemas import Episode, ExtractionResult, Fact, Session, Turn, make_id
 from smem.temporal import normalize_relative_date
 from smem.tokens import count_tokens
 
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v3-detail1"
 
 # Keys: the long tail lives in the ENTITY (a noun phrase naming the thing described), the ATTRIBUTE
 # comes from this closed list so that constrained decoding pins it. Two facts about the same thing
@@ -113,6 +113,12 @@ skip the assistant's explanations unless the user acted on them. Include the tur
 Convert relative dates ("last Wednesday", "next month") to absolute dates using the session date.
 
 "facts": (entity, attribute, value) triples for anything a later question could ask about.
+The value MUST keep the specific number, time, date, quantity, ratio, price, name or title the speaker
+stated -- "3:1", "6:30 pm", "February 14th", "$495", "Golden Retriever", "The Glass Menagerie" -- never
+a generalisation of it ("experimenting with ratios", "evening", "a breed"). If the user gives a
+detail, the detail is the value. A fact without its detail is worthless later.
+Also record the assistant's CONCRETE recommendations the user asked for and reacted to (a named
+place, title, product, amount or instruction): entity = the thing, kind = "stated", speaker = "assistant".
 
 Entity rules. The entity is THE THING THE ATTRIBUTE DESCRIBES. Use "user" only for the user's own personal
 attributes (name, location, employer, occupation, allergy, health, preferences, relationships). Anything the
