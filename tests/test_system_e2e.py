@@ -101,22 +101,40 @@ def test_ingest_key_ignores_read_side_settings():
     assert diff.ingest_key("q1") != base.ingest_key("q1") and base.ingest_key("q2") != base.ingest_key("q1")
 
 
-def test_raw_turns_reach_the_reader_and_survive_the_cache(worked_example, tmp_path):
-    """write.keep_raw_turns stores every verbatim turn; budget.raw_tokens>0 hands the reader the source
-    turns of the packed entries (neighbours included), under that budget, and they survive save/load."""
+def test_raw_turns_are_budgeted_candidates(worked_example, tmp_path):
+    """write.raw_turns makes every verbatim turn a candidate entry that costs its own tokens; the reader
+    sees the surviving ones as excerpts under budget.raw_tokens, never as packed entries; the store
+    round-trips through the ingest cache; and flipping it changes the ingest identity."""
     now = T0 + timedelta(days=120)
     off = build(sessions=worked_example)
-    assert off.ask("Where did I live in March?", now).read.excerpts == []      # default: off, identity unchanged
-    on = build(sessions=worked_example, cfg_overrides={"write.keep_raw_turns": True, "budget.raw_tokens": 120})
-    assert len(on.store.turns) == sum(len(s.turns) for s in worked_example)
+    assert off.ask("Where did I live in March?", now).read.excerpts == []
+    on = build(sessions=worked_example, cfg_overrides={"write.raw_turns": True, "budget.raw_tokens": 120, "read.k_turns": 5})
+    raw = on.store.raw_ids()
+    assert len(raw) == sum(1 for s in worked_example for t in s.turns if t.content.strip())
+    assert raw <= on.writer.active_ids()          # unbounded budget: every turn is kept
+    assert on.stats()["store_tokens"] == off.stats()["store_tokens"] + sum(on.store.get(i).tokens for i in raw & on.writer.active_ids())
     r = on.ask("Where did I live in March?", now).read
-    assert r.excerpts and r.raw_tokens <= 120 and any("Boston" in t.text for t in r.excerpts)
-    assert r.raw_tokens == sum(t.tokens for t in r.excerpts)
+    assert r.excerpts and r.raw_tokens <= 120 and r.raw_tokens == sum(t.tokens for t in r.excerpts)
+    assert any("Boston" in t.text for t in r.excerpts)
+    assert not any(e.id in raw for e in r.packed)
+    # a question only a verbatim assistant turn can answer is reachable through the raw index
+    r2 = on.ask("What tool should I run to find the invalid access?", now).read
+    assert any("valgrind" in t.text for t in r2.excerpts)
     on.save_state(tmp_path / "s")
-    again = build(sessions=[], cfg_overrides={"write.keep_raw_turns": True, "budget.raw_tokens": 120})
+    again = build(sessions=[], cfg_overrides={"write.raw_turns": True, "budget.raw_tokens": 120, "read.k_turns": 5})
     again.load_state(tmp_path / "s")
-    assert again.store.turns == on.store.turns
-    assert [(t.session_id, t.turn_idx) for t in again.ask("Where did I live in March?", now).read.excerpts] == \
-           [(t.session_id, t.turn_idx) for t in r.excerpts]
-    assert on.cfg.ingest_key("q") != off.cfg.ingest_key("q")                     # flipping it re-ingests
-    assert on.cfg.with_overrides({"budget.raw_tokens": 0}).ingest_key("q") == on.cfg.ingest_key("q")  # read-side
+    assert again.store.raw_ids() == raw
+    assert [t.id for t in again.ask("Where did I live in March?", now).read.excerpts] == [t.id for t in r.excerpts]
+    assert on.cfg.ingest_key("q") != off.cfg.ingest_key("q")
+    assert on.cfg.with_overrides({"budget.raw_tokens": 0, "read.k_turns": 0}).ingest_key("q") == on.cfg.ingest_key("q")
+
+
+def test_raw_turns_compete_for_the_budget(worked_example):
+    """Under a tight budget the raw turns are evicted or refused like any entry: the store never exceeds
+    B, and the reader still works with whatever survived."""
+    now = T0 + timedelta(days=120)
+    mem = build(sessions=worked_example, cfg_overrides={"write.raw_turns": True, "budget.raw_tokens": 120,
+                                                        "budget.store_tokens": 60, "write.policy": "all"})
+    assert mem.stats()["store_tokens"] <= 60
+    res = mem.ask("Where did I live in March?", now)
+    assert res.read.tokens <= 200

@@ -1,0 +1,148 @@
+config:
+  name: default
+  budget:
+    store_tokens: 1000000000
+    read_tokens: 2000
+    raw_tokens: 4000
+    consolidate_every: 5
+  write:
+    policy: sieve
+    novelty_threshold: 0.15
+    sieve_eps: 1.0
+    sieve_min_threshold: 0.0003
+    sieve_max_threshold: 0.5
+    sieve_cost_floor: 20
+    hysteresis_gamma: 0.1
+    episode_dup_sim: 0.95
+    keep_raw_turns: true
+    index_raw_turns: true
+    validity_chain: true
+    multi_valued_attributes:
+    - preference
+    - favorite
+    - dislike
+    - allergy
+    - health
+    - goal
+    - relationship
+    - method
+    - other
+  evict:
+    policy: swap
+    hawkes_mu_floor: 0.01
+    hawkes_alpha: 0.5
+    hawkes_beta: 0.03
+    heuristic_weights:
+      recency: 0.4
+      frequency: 0.3
+      specificity: 0.2
+      source: 0.1
+    seed: 0
+  consolidation:
+    policy: no_consolidation
+    cluster_sim: 0.6
+    window_sessions: 10
+    min_cluster_size: 3
+    redundancy_threshold: 0.35
+    nli_threshold: 0.8
+    nli_direction: summary_supported
+    fixed_interval: 5
+  read:
+    retrieval: two_hop
+    packing: budgeted_greedy
+    k_bm25: 30
+    k_turns: 30
+    raw_diversity: 0
+    k_dense: 30
+    rrf_k: 60
+    mmr_lambda: 0.7
+    second_hop_entities: 5
+    tau_abs: 0.3
+    rewrite_queries: true
+  extract:
+    backend: llm
+    constrained_decoding: true
+    max_episode_tokens: 60
+    max_turn_tokens: 2000
+    max_output_tokens: 4096
+    prompt_version: v3-detail
+    repetition_penalty: 1.0
+    loop_retry_temperature: 0.6
+    cache_dir: .cache/extract
+  models:
+    embedder: BAAI/bge-m3
+    embed_dim: 256
+    embed_device: cpu
+    nli_device: cpu
+    extract_model: Qwen/Qwen3-8B-AWQ
+    extract_base_url: http://localhost:8000/v1
+    answer_model: gpt-4.1-mini
+    answer_base_url: null
+    judge_model: gpt-4o
+    judge_base_url: null
+    judge_max_tokens: 512
+    answer_max_tokens: 300
+    answer_prompt_version: strict
+    request_max_retries: 2
+    request_timeout: 120.0
+    local_request_timeout: 900.0
+    retry_attempts: 6
+    retry_base_delay: 2.0
+    retry_max_delay: 60.0
+    nli_model: cross-encoder/nli-deberta-v3-base
+    llm_cache_dir: .cache/llm
+    embed_cache_dir: .cache/embed
+    ingest_cache_dir: .cache/ingest
+    schema_mode: response_format
+    answer_provider: auto
+    judge_provider: auto
+    answer_api_key_env: OPENAI_API_KEY
+    judge_api_key_env: OPENAI_API_KEY
+    extract_extra_body:
+      chat_template_kwargs:
+        enable_thinking: false
+  anthropic:
+    thinking: 'off'
+    effort: null
+    fallback_model: null
+    max_retries: 2
+    timeout: 600.0
+args:
+  split: dev
+  config: configs/default.yaml
+  backend: llm
+  judge: llm
+  store_budget: null
+  read_budget: null
+  ablate:
+  - extract.prompt_version=v3-detail
+  - consolidation.policy=no_consolidation
+  - write.keep_raw_turns=true
+  - budget.raw_tokens=4000
+  - models.embed_device=cpu
+  - write.index_raw_turns=true
+  - read.k_turns=30
+  - models.nli_device=cpu
+  ablation_group: null
+  ablations_file: evals/ablations.yaml
+  baseline: null
+  data: null
+  dev_size: 100
+  seed: 0
+  types: null
+  ids: 58ef2f1c,a06e4cfe,311778f1,c14c00dd,6d550036,dd2973ad,d682f1a2,2788b940,e3038f8c,81507db6,32260d93,09d032c9,4f54b7c9,9ee3ecd6,bc149d6b,0bc8ad92,gpt4_7a0daae1,gpt4_21adecb5,71017277,gpt4_59149c78,08f4fc43,gpt4_8c8961ae,d01c6aa8,gpt4_2f56ae70,89941a93,f9e8c073,2133c1b5,59524333,cf22b7bf,c4f10528,8aef76bc,41275add,c7cf7dfd
+  limit: null
+  n_boot: 1000
+  out: evals/results_turns/shard2
+  rerun: false
+  quiet: true
+  stats_only: false
+overrides:
+  extract.prompt_version: v3-detail
+  consolidation.policy: no_consolidation
+  write.keep_raw_turns: true
+  budget.raw_tokens: 4000
+  models.embed_device: cpu
+  write.index_raw_turns: true
+  read.k_turns: 30
+  models.nli_device: cpu

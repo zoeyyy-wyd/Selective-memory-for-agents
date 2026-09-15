@@ -28,7 +28,7 @@ from smem.hawkes import HawkesIntensity
 from smem.llm import LLM, AnthropicLLM, OpenAICompatLLM
 from smem.read import Reader, ReadResult
 from smem.tokens import count_tokens
-from smem.schemas import RawTurn, Fact, Session
+from smem.schemas import Episode, Fact, Session, make_id
 from smem.store import MemoryStore, key_drift
 from smem.write import WritePolicy
 
@@ -94,14 +94,18 @@ class SelectiveMemory:
             self.schema_errors += 1
         self.now = session.ts
         self.session_ids.append(session.session_id)
-        if self.cfg.write.keep_raw_turns:
-            self.store.add_turns(RawTurn(session_id=session.session_id, turn_idx=i, ts=session.ts, speaker=t.role,
-                                         text=t.content.strip(), tokens=count_tokens(t.content))
-                                 for i, t in enumerate(session.turns))
+        if self.cfg.write.raw_turns:
+            # verbatim turns join the candidate pool after the extracted entries, so the paraphrases are
+            # admitted exactly as before and each turn is judged on what it adds beyond them
+            for i, t in enumerate(session.turns):
+                text = t.content.strip()
+                if not text:
+                    continue
+                result.episodes.append(Episode(
+                    id=make_id("raw", session.session_id, i), ts=session.ts, session_id=session.session_id,
+                    turn_idx=i, speaker=t.role, text=text, entities=[], tokens=count_tokens(text), raw=True))
         for ep in result.episodes:
             self.candidate_origin.setdefault(ep.id, (session.session_id, ep.turn_idx))
-        for f in result.facts:
-            self.candidate_origin.setdefault(f.id, (session.session_id, -1))
         texts = [e.text for e in result.episodes + result.facts]
         vecs = self.embedder.encode(texts) if texts else np.zeros((0, self.embedder.dim), dtype=np.float32)
         vec_of = {e.id: vecs[i] for i, e in enumerate(result.episodes + result.facts)}
@@ -162,8 +166,9 @@ class SelectiveMemory:
         read = self.reader.read(question, now, allowed)
         answer = self.answerer.answer(question, read, now)
         abstained = read.abstain or answer.strip().lower().startswith("i don't know")
-        cited, invalid = check_citations(answer, read.packed_ids)
-        return AskResult(question, answer if not abstained else ABSTAIN_TEXT, abstained, read, read.packed_ids,
+        injected = read.packed_ids | {e.id for e in read.excerpts}
+        cited, invalid = check_citations(answer, injected)
+        return AskResult(question, answer if not abstained else ABSTAIN_TEXT, abstained, read, injected,
                          cited, invalid)
 
     # ---- bookkeeping for the evidence metrics --------------------------------------------------

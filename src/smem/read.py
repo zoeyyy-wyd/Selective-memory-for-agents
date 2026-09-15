@@ -17,7 +17,7 @@ from smem.coverage import CoverageState, budgeted_greedy
 from smem.embed import Embedder, tokenize
 from smem.hawkes import HawkesIntensity, hawkes_keys
 from smem.llm import LLM
-from smem.schemas import Entry, Episode, Fact, RawTurn
+from smem.schemas import Entry, Episode, Fact
 from smem.store import MemoryStore
 from smem.temporal import TemporalConstraint, parse_temporal
 
@@ -49,7 +49,7 @@ class ReadResult:
     top_rel: float
     hop2_budget: int = 0
     diagnostics: dict = field(default_factory=dict)
-    excerpts: list[RawTurn] = field(default_factory=list)   # verbatim source turns of the packed entries
+    excerpts: list[Episode] = field(default_factory=list)   # surviving raw turns shown to the reader
     raw_tokens: int = 0
 
     @property
@@ -77,6 +77,8 @@ class Reader:
         constraint = parse_temporal(question, now)
         queries = self.rewrite(question)
         qvec = self.embedder.encode([question])[0]
+        raw_allowed = self.store.raw_ids() & allowed
+        allowed = allowed - raw_allowed          # raw turns are shown as excerpts, never packed as entries
         fused = self._retrieve(queries, qvec, allowed)
         cands = self._resolve_chains(fused, constraint, allowed, qvec)
         hop2_budget = 0
@@ -92,7 +94,10 @@ class Reader:
             self.store.touch(e.id, now)
             hit_keys.update(hawkes_keys(e))
         self.hawkes.observe_many(sorted(hit_keys), now)
-        excerpts = self._expand_sources(packed, packed_rel) if self.cfg.budget.raw_tokens > 0 else []
+        excerpts = (self._expand_sources(packed, packed_rel, queries, qvec, raw_allowed)
+                    if self.cfg.budget.raw_tokens > 0 and raw_allowed else [])
+        for e in excerpts:
+            self.store.touch(e.id, now)
         return ReadResult(question=question, constraint=constraint, queries=queries, candidates=cands,
                           packed=packed, packed_rel=packed_rel, tokens=tokens, abstain=abstain,
                           top_rel=top_rel, hop2_budget=hop2_budget, excerpts=excerpts,
@@ -100,11 +105,15 @@ class Reader:
                           diagnostics={"n_candidates": len(cands), "n_hop2": sum(1 for c in cands if c.hop == 2)})
 
     # ---- source expansion ----------------------------------------------------------------------
-    def _expand_sources(self, packed: list[Entry], packed_rel: dict[str, float]) -> list[RawTurn]:
-        """Verbatim turns behind the packed entries, under budget.raw_tokens. A turn scores the summed
-        relevance of the entries extracted from it (neighbouring turns at half weight, so an assistant
-        reply comes along with the user turn that cites it). Every session with a hit keeps its best
-        turn before any session takes a second one, so multi-session questions are not crowded out."""
+    def _expand_sources(self, packed: list[Entry], packed_rel: dict[str, float], queries: list[str],
+                        qvec: np.ndarray, raw_allowed: set[str]) -> list[Episode]:
+        """Surviving raw turns for the reader, under budget.raw_tokens. A turn scores the summed relevance
+        of the packed entries extracted from it (neighbouring turns at half weight, so an assistant reply
+        comes along with the user turn that cites it) plus, with read.k_turns, its own retrieval score.
+        With read.raw_diversity=n the n best sessions each keep their best turn first."""
+        by_loc: dict[tuple[str, int], Episode] = {}
+        for e in self.store.entries(raw_allowed):
+            by_loc[(e.session_id, e.turn_idx)] = e
         score: dict[tuple[str, int], float] = {}
         for e in packed:
             rel = packed_rel.get(e.id, 0.0) + 1e-3
@@ -116,10 +125,20 @@ class Reader:
                     src = self.store.get(sid)
                     if isinstance(src, Episode):
                         locs.append((src.session_id, src.turn_idx))
-            for s, i in locs:
+                if not locs and e.session_id:   # source paraphrase evicted: spread over the session's turns
+                    sess = [k for k in by_loc if k[0] == e.session_id]
+                    for k in sess:
+                        score[k] = score.get(k, 0.0) + rel / len(sess)
+            for s_, i in locs:
                 for j, w in ((i, 1.0), (i - 1, 0.5), (i + 1, 0.5)):
-                    if self.store.turn(s, j) is not None:
-                        score[(s, j)] = score.get((s, j), 0.0) + rel * w
+                    if (s_, j) in by_loc:
+                        score[(s_, j)] = score.get((s_, j), 0.0) + rel * w
+        if self.r.k_turns > 0:
+            for id_, rel in self._retrieve(queries, qvec, raw_allowed, k=self.r.k_turns).items():
+                e = self.store.get(id_)
+                if isinstance(e, Episode):
+                    k = (e.session_id, e.turn_idx)
+                    score[k] = score.get(k, 0.0) + self.r.turn_weight * rel
         ranked = sorted(score, key=lambda k: -score[k])
         order = ranked
         if self.r.raw_diversity > 0:
@@ -129,10 +148,10 @@ class Reader:
                     first.setdefault(k[0], k)
             head = list(first.values())
             order = head + [k for k in ranked if k not in set(head)]
-        chosen: list[RawTurn] = []
+        chosen: list[Episode] = []
         used = 0
         for k in order:
-            t = self.store.turn(*k)
+            t = by_loc.get(k)
             if t is None or used + t.tokens > self.cfg.budget.raw_tokens:
                 continue
             chosen.append(t); used += t.tokens
@@ -156,14 +175,15 @@ class Reader:
         return queries
 
     # ---- retrieval -----------------------------------------------------------------------------
-    def _retrieve(self, queries: list[str], qvec: np.ndarray, allowed: set[str]) -> dict[str, float]:
+    def _retrieve(self, queries: list[str], qvec: np.ndarray, allowed: set[str], k: int | None = None) -> dict[str, float]:
         rrf: dict[str, float] = Counter()
+        k_bm25, k_dense = (k, k) if k else (self.r.k_bm25, self.r.k_dense)
         k = self.r.rrf_k
         for q in queries:
-            for rank, (id_, _) in enumerate(self.store.search_bm25(q, self.r.k_bm25, allowed)):
+            for rank, (id_, _) in enumerate(self.store.search_bm25(q, k_bm25, allowed)):
                 rrf[id_] += 1.0 / (k + rank + 1)
             vec = qvec if q is queries[0] else self.embedder.encode([q])[0]
-            for rank, (id_, _) in enumerate(self.store.search_dense(vec, self.r.k_dense, allowed)):
+            for rank, (id_, _) in enumerate(self.store.search_dense(vec, k_dense, allowed)):
                 rrf[id_] += 1.0 / (k + rank + 1)
         if not rrf:
             return {}

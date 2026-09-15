@@ -54,6 +54,9 @@ class SentenceTransformerEmbedder:
         from sentence_transformers import SentenceTransformer  # heavy import kept local
 
         self.model = SentenceTransformer(model_name, device=device)
+        # Raw turns can run to several thousand tokens; 2048 bounds attention memory on a shared GPU and
+        # matches the extractor's own per-turn cap. Entries are far shorter and unaffected.
+        self.model.max_seq_length = min(getattr(self.model, "max_seq_length", 2048) or 2048, 2048)
         self.dim = int(self.model.get_sentence_embedding_dimension())
 
     def encode(self, texts: list[str]) -> np.ndarray:

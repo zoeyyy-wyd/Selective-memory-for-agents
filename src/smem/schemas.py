@@ -39,17 +39,6 @@ class Session(BaseModel):
         return h.hexdigest()[:16]
 
 
-class RawTurn(BaseModel):
-    """One verbatim conversation turn kept alongside the extracted entries (write.keep_raw_turns).
-    Never retrieved on its own: the read path reaches it through the entries extracted from it."""
-    session_id: str
-    turn_idx: int
-    ts: datetime
-    speaker: Speaker
-    text: str
-    tokens: int = 0
-
-
 class Episode(BaseModel):
     id: str
     ts: datetime
@@ -63,6 +52,7 @@ class Episode(BaseModel):
     consolidated: bool = False
     access_count: int = 0
     last_access: datetime | None = None
+    raw: bool = False   # a verbatim conversation turn (write.raw_turns), competing for the budget like any entry
 
     @property
     def source_type(self) -> str:

@@ -131,7 +131,7 @@ class WritePolicy:
             seen.add(ep.id)
             vec = vecs[ep.id]
             ep.embedding = vec.tolist()
-            if self._is_duplicate_episode(vec):
+            if not ep.raw and self._is_duplicate_episode(vec):
                 self.stats.merged += 1
                 continue
             self._select(ep, vec, intensities, now)
@@ -210,7 +210,10 @@ class WritePolicy:
 
     def _consider(self, s: Sieve, e: Entry, vec: np.ndarray, now: datetime, protect: set[str]) -> bool:
         cost = max(e.tokens, 1)
-        policy = self.cfg.write.policy
+        # A verbatim turn is the source record, not a claim: it is not filtered by the density threshold
+        # (its marginal gain over its own paraphrases is always small per token) but it pays its full cost
+        # and is swapped or evicted like any entry once the budget binds.
+        policy = "fill" if getattr(e, "raw", False) else self.cfg.write.policy
         if policy == "novelty_threshold":
             _, sim = self.store.vectors.max_sim(vec, s.selected) if s.selected else (None, 0.0)
             if 1.0 - sim < self.cfg.write.novelty_threshold:

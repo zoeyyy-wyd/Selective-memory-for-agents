@@ -28,6 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--prompt-version", default=None, help="defaults to the config's extract.prompt_version")
     p.add_argument("--batch", type=int, default=256)
     p.add_argument("--device", default=None, help="cuda (default) or cpu")
+    p.add_argument("--turns", action="store_true", help="embed the raw turn texts (write.index_raw_turns) instead of the extracted entries")
     args = p.parse_args(argv)
     load_dotenv()
     cfg = SystemConfig.load(args.config)
@@ -49,6 +50,9 @@ def main(argv: list[str] | None = None) -> int:
     cache = DiskCache(cfg.extract.cache_dir)
     texts: set[str] = set()
     missing = 0
+    if args.turns:
+        texts.update(t.content.strip() for s in sessions for t in s.turns)
+        sessions = []
     for s in sessions:
         raw = cache.get(DiskCache.key("extract", version, cfg.models.extract_model, True, cfg.extract.max_turn_tokens,
                                       s.session_id, s.content_hash()))
@@ -58,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         res = ex.parse(s, raw)
         texts.update(e.text for e in res.episodes)
         texts.update(f.text for f in res.facts)
-    print(f"{len(sessions)} sessions ({missing} without a cached extraction for {version!r}); {len(texts)} distinct entry texts")
+    print(f"{len(sessions)} sessions ({missing} without a cached extraction for {version!r}); {len(texts)} distinct {'turn' if args.turns else 'entry'} texts")
 
     emb = get_embedder(cfg.models.embedder, cfg.models.embed_dim, cfg.models.embed_cache_dir, device=args.device)
     todo = [t for t in texts if not emb.has(t)] if hasattr(emb, "has") else sorted(texts)

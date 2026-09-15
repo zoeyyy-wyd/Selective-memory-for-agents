@@ -34,10 +34,10 @@ class WriteConfig(BaseModel):
     sieve_cost_floor: int = 20
     hysteresis_gamma: float = 0.1      # γ: swap only if new gain ≥ (1+γ) × victim gain
     episode_dup_sim: float = 0.95      # near-duplicate episodes are merged, not re-stored
-    # Keep every verbatim turn next to the extracted entries so the read path can show the reader the
-    # source of a packed entry (budget.raw_tokens). Raw turns are not written by the policy and do not
-    # count against store_tokens; they change the ingest identity, so flipping this re-ingests.
-    keep_raw_turns: bool = False
+    # Every verbatim turn becomes a candidate entry (Episode.raw) with its own token cost, so the write
+    # policy chooses between the exact turn and the cheaper extracted paraphrase under the same budget B.
+    # The read path shows surviving raw turns to the reader under budget.raw_tokens.
+    raw_turns: bool = False
     validity_chain: bool = True        # False = overwrite (the no_validity_chain ablation)
     # A validity chain means "same key, new value => the old value was superseded". That is true of a
     # single-valued attribute (one location, one employer, one running count) and false of a
@@ -80,6 +80,8 @@ class ReadConfig(BaseModel):
     retrieval: RetrievalName = "two_hop"
     packing: PackingName = "budgeted_greedy"
     k_bm25: int = 30
+    turn_weight: float = 1.0   # weight of directly retrieved turns against entry-derived turns in the source expansion
+    k_turns: int = 0         # surviving raw turns retrieved directly per query and channel, merged into the source expansion; 0 = only turns behind packed entries
     raw_diversity: int = 0   # source expansion: this many sessions get their best turn before any session gets a second; 0 = pure score order
     k_dense: int = 30
     rrf_k: int = 60

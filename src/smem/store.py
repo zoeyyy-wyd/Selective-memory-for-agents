@@ -14,7 +14,7 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 
 from smem.embed import tokenize
-from smem.schemas import RawTurn, Entry, Episode, Fact
+from smem.schemas import Entry, Episode, Fact
 
 try:  # pragma: no cover
     import faiss  # type: ignore
@@ -91,7 +91,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodes (
     id TEXT PRIMARY KEY, ts TEXT, session_id TEXT, turn_idx INTEGER, speaker TEXT, text TEXT,
     entities TEXT, tokens INTEGER, consolidated INTEGER, access_count INTEGER, last_access TEXT,
-    embedding BLOB
+    embedding BLOB, raw INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS facts (
     id TEXT PRIMARY KEY, entity TEXT, attribute TEXT, value TEXT, valid_from TEXT, valid_to TEXT,
@@ -99,10 +99,6 @@ CREATE TABLE IF NOT EXISTS facts (
     access_count INTEGER, last_access TEXT, embedding BLOB
 );
 CREATE INDEX IF NOT EXISTS facts_ea ON facts(entity, attribute);
-CREATE TABLE IF NOT EXISTS turns (
-    session_id TEXT, turn_idx INTEGER, ts TEXT, speaker TEXT, text TEXT, tokens INTEGER,
-    PRIMARY KEY (session_id, turn_idx)
-);
 """
 
 
@@ -125,7 +121,6 @@ class MemoryStore:
         self._dirty = True
         self._insert_order: dict[str, int] = {}
         self._counter = 0
-        self.turns: dict[tuple[str, int], RawTurn] = {}
         self._load()
 
     # ---- persistence ---------------------------------------------------------------------------
@@ -151,8 +146,11 @@ class MemoryStore:
         src.close()
         self.episodes.clear(); self.facts.clear(); self.vectors = VectorIndex(self.dim)
         self._entity_index.clear(); self._pred.clear(); self._bm25 = None; self._bm25_ids = []
-        self._insert_order.clear(); self._counter = 0; self._dirty = True; self.turns.clear()
-        self.db.executescript(_SCHEMA)   # older dumps predate the turns table
+        self._insert_order.clear(); self._counter = 0; self._dirty = True
+        self.db.executescript(_SCHEMA)
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(episodes)")]
+        if "raw" not in cols:   # dumps written before raw turns existed
+            self.db.execute("ALTER TABLE episodes ADD COLUMN raw INTEGER DEFAULT 0")
         self._load()
 
     def _load(self) -> None:
@@ -161,6 +159,7 @@ class MemoryStore:
                 id=row[0], ts=_dt(row[1]), session_id=row[2], turn_idx=row[3], speaker=row[4], text=row[5],
                 entities=json.loads(row[6]), tokens=row[7], consolidated=bool(row[8]), access_count=row[9],
                 last_access=_dt(row[10]), embedding=np.frombuffer(row[11], dtype=np.float32).tolist(),
+                raw=bool(row[12]) if len(row) > 12 and row[12] is not None else False,
             )
             self._index(ep)
         for row in self.db.execute("SELECT * FROM facts"):
@@ -172,29 +171,14 @@ class MemoryStore:
             )
             self._index(f)
 
-        for row in self.db.execute("SELECT session_id, turn_idx, ts, speaker, text, tokens FROM turns"):
-            t = RawTurn(session_id=row[0], turn_idx=row[1], ts=_dt(row[2]), speaker=row[3], text=row[4], tokens=row[5])
-            self.turns[(t.session_id, t.turn_idx)] = t
-
-    # ---- raw turns (payload, not entries) -----------------------------------------------------
-    def add_turns(self, turns: Iterable[RawTurn]) -> None:
-        rows = []
-        for t in turns:
-            self.turns[(t.session_id, t.turn_idx)] = t
-            rows.append((t.session_id, t.turn_idx, t.ts.isoformat(), t.speaker, t.text, t.tokens))
-        self.db.executemany("INSERT OR REPLACE INTO turns VALUES (?, ?, ?, ?, ?, ?)", rows)
-
-    def turn(self, session_id: str, turn_idx: int) -> RawTurn | None:
-        return self.turns.get((session_id, turn_idx))
-
     def _write(self, e: Entry) -> None:
         emb = np.asarray(e.embedding, dtype=np.float32).tobytes()
         if isinstance(e, Episode):
             self.db.execute(
-                "INSERT OR REPLACE INTO episodes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO episodes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (e.id, e.ts.isoformat(), e.session_id, e.turn_idx, e.speaker, e.text, json.dumps(e.entities),
                  e.tokens, int(e.consolidated), e.access_count,
-                 e.last_access.isoformat() if e.last_access else None, emb),
+                 e.last_access.isoformat() if e.last_access else None, emb, int(e.raw)),
             )
         else:
             self.db.execute(
@@ -258,6 +242,25 @@ class MemoryStore:
     def ids(self) -> list[str]:
         return list(self.episodes) + list(self.facts)
 
+    def raw_ids(self) -> set[str]:
+        return {i for i, e in self.episodes.items() if e.raw}
+
+    def _bm25_text(self, e: Entry, turn_facts: dict[tuple[str, int], list[str]]) -> str:
+        """Raw turns are keyed by their text plus the facts extracted from that turn (the fact-augmented
+        key); every other entry by its own text."""
+        if isinstance(e, Episode) and e.raw:
+            return e.text + " " + " ".join(turn_facts.get((e.session_id, e.turn_idx), ()))
+        return e.text
+
+    def _turn_facts(self) -> dict[tuple[str, int], list[str]]:
+        loc = {e.id: (e.session_id, e.turn_idx) for e in self.episodes.values() if not e.raw}
+        out: dict[tuple[str, int], list[str]] = defaultdict(list)
+        for f in self.facts.values():
+            for sid in f.sources:
+                if sid in loc:
+                    out[loc[sid]].append(f.text)
+        return out
+
     def entries(self, ids: Iterable[str] | None = None) -> list[Entry]:
         if ids is None:
             return list(self.episodes.values()) + list(self.facts.values())
@@ -294,7 +297,8 @@ class MemoryStore:
         if not self._dirty:
             return
         self._bm25_ids = self.ids()
-        corpus = [tokenize(self.get(i).text) or ["<empty>"] for i in self._bm25_ids]
+        turn_facts = self._turn_facts()
+        corpus = [tokenize(self._bm25_text(self.get(i), turn_facts)) or ["<empty>"] for i in self._bm25_ids]
         self._bm25 = BM25Okapi(corpus) if corpus else None
         self._dirty = False
 

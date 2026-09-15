@@ -140,17 +140,26 @@ class OpenAICompatLLM:
         from openai import APIConnectionError, APIStatusError, APITimeoutError, RateLimitError
 
         delay = self.retry_base_delay
-        for attempt in range(self.retry_attempts):
+        # A 429 is a shared per-minute token quota, not an outage: several evaluation shards hitting
+        # it together all need to wait out the window, so it gets its own, longer budget of attempts.
+        rate_limit_attempts = max(self.retry_attempts, 20)
+        attempt = 0
+        budget = self.retry_attempts
+        while True:
             try:
                 return self.client.chat.completions.create(**kwargs)
-            except (RateLimitError, APIConnectionError, APITimeoutError) as e:
+            except RateLimitError as e:
+                last = e
+                budget = rate_limit_attempts
+            except (APIConnectionError, APITimeoutError) as e:
                 last = e
             except APIStatusError as e:
                 if e.status_code < 500:
                     raise
                 last = e
             self.n_retries += 1
-            if attempt == self.retry_attempts - 1:
+            attempt += 1
+            if attempt >= budget:
                 raise last
             time.sleep(min(delay, self.retry_max_delay) * (1.0 + 0.25 * random.random()))
             delay *= 2

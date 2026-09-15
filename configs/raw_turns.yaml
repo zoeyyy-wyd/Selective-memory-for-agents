@@ -1,0 +1,17 @@
+# Reference configuration plus verbatim source turns for the reader (docs/accuracy-plan.md, section 8).
+# dev100: 59 (facts only) -> 71 (raw turns behind packed entries, 4k) -> 77 (raw turns also indexed, 6k).
+# Raw turns are candidate entries: each costs its own tokens against budget.store_tokens and is admitted,
+# swapped or evicted by the write policy like any extracted entry.
+extends: default.yaml
+write:
+  raw_turns: true
+budget:
+  raw_tokens: 6000
+read:
+  k_turns: 30
+extract:
+  prompt_version: v3-detail
+consolidation:
+  policy: no_consolidation
+models:
+  nli_device: cpu    # the NLI model is only needed by consolidation; keep it off the shared GPU
