@@ -28,6 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--prompt-version", default=None, help="defaults to the config's extract.prompt_version")
     p.add_argument("--batch", type=int, default=256)
     p.add_argument("--device", default=None, help="cuda (default) or cpu")
+    p.add_argument("--ids", default=None, help="comma-separated question ids, or @file, to restrict the split")
     p.add_argument("--turns", action="store_true", help="embed the raw turn texts (write.index_raw_turns) instead of the extracted entries")
     args = p.parse_args(argv)
     load_dotenv()
@@ -40,6 +41,10 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError:
         dev, test = stratified_split(qs)
     questions = {"dev": dev, "test": test, "all": qs}[args.split]
+    if args.ids:
+        raw_ids = open(args.ids[1:]).read() if args.ids.startswith("@") else args.ids
+        wanted = set(raw_ids.split(","))
+        questions = [q for q in questions if q.question_id in wanted]
     sessions = unique_sessions(questions)
 
     # parse cached extractions only -- never call the extraction model here

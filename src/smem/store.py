@@ -118,6 +118,8 @@ class MemoryStore:
         self._pred: dict[str, str] = {}  # fact id -> id of the fact it supersedes
         self._bm25: BM25Okapi | None = None
         self._bm25_ids: list[str] = []
+        self._bm25_raw: BM25Okapi | None = None
+        self._bm25_raw_ids: list[str] = []
         self._dirty = True
         self._insert_order: dict[str, int] = {}
         self._counter = 0
@@ -145,7 +147,7 @@ class MemoryStore:
             src.backup(self.db)
         src.close()
         self.episodes.clear(); self.facts.clear(); self.vectors = VectorIndex(self.dim)
-        self._entity_index.clear(); self._pred.clear(); self._bm25 = None; self._bm25_ids = []
+        self._entity_index.clear(); self._pred.clear(); self._bm25 = None; self._bm25_ids = []; self._bm25_raw = None; self._bm25_raw_ids = []
         self._insert_order.clear(); self._counter = 0; self._dirty = True
         self.db.executescript(_SCHEMA)
         cols = [r[1] for r in self.db.execute("PRAGMA table_info(episodes)")]
@@ -294,26 +296,32 @@ class MemoryStore:
 
     # ---- retrieval -----------------------------------------------------------------------------
     def _ensure_bm25(self) -> None:
+        """Two corpora: the extracted entries, and the raw turns keyed by turn text + their facts. Keeping
+        them apart leaves the entries' idf statistics exactly as without raw turns."""
         if not self._dirty:
             return
-        self._bm25_ids = self.ids()
         turn_facts = self._turn_facts()
-        corpus = [tokenize(self._bm25_text(self.get(i), turn_facts)) or ["<empty>"] for i in self._bm25_ids]
+        self._bm25_ids = [i for i in self.ids() if not (i in self.episodes and self.episodes[i].raw)]
+        corpus = [tokenize(self.get(i).text) or ["<empty>"] for i in self._bm25_ids]
         self._bm25 = BM25Okapi(corpus) if corpus else None
+        self._bm25_raw_ids = [i for i, e in self.episodes.items() if e.raw]
+        corpus_raw = [tokenize(self._bm25_text(self.episodes[i], turn_facts)) or ["<empty>"] for i in self._bm25_raw_ids]
+        self._bm25_raw = BM25Okapi(corpus_raw) if corpus_raw else None
         self._dirty = False
 
-    def search_bm25(self, query: str, k: int, allowed: set[str] | None = None) -> list[tuple[str, float]]:
+    def search_bm25(self, query: str, k: int, allowed: set[str] | None = None, raw: bool = False) -> list[tuple[str, float]]:
         self._ensure_bm25()
-        if self._bm25 is None:
+        index, ids = (self._bm25_raw, self._bm25_raw_ids) if raw else (self._bm25, self._bm25_ids)
+        if index is None:
             return []
         q_tokens = tokenize(query)
-        scores = self._bm25.get_scores(q_tokens)
+        scores = index.get_scores(q_tokens)
         if len(scores) and float(np.max(scores)) <= 0:
             # tiny corpora: every idf is zero, so fall back to plain term overlap
             q_set = set(q_tokens)
-            scores = np.array([len(q_set & set(tokenize(self.get(i).text))) for i in self._bm25_ids], dtype=float)
-        pairs = [(self._bm25_ids[i], float(s)) for i, s in enumerate(scores)
-                 if s > 0 and (allowed is None or self._bm25_ids[i] in allowed)]
+            scores = np.array([len(q_set & set(tokenize(self.get(i).text))) for i in ids], dtype=float)
+        pairs = [(ids[i], float(s)) for i, s in enumerate(scores)
+                 if s > 0 and (allowed is None or ids[i] in allowed)]
         pairs.sort(key=lambda p: -p[1])
         return pairs[:k]
 

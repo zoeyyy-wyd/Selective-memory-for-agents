@@ -13,3 +13,7 @@ evals/results/*
 *.sqlite
 *.db
 .env
+
+# evaluation outputs (per-run records, summaries)
+evals/results_*/
+evals/results/

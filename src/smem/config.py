@@ -34,8 +34,9 @@ class WriteConfig(BaseModel):
     sieve_cost_floor: int = 20
     hysteresis_gamma: float = 0.1      # γ: swap only if new gain ≥ (1+γ) × victim gain
     episode_dup_sim: float = 0.95      # near-duplicate episodes are merged, not re-stored
-    # Every verbatim turn becomes a candidate entry (Episode.raw) with its own token cost, so the write
-    # policy chooses between the exact turn and the cheaper extracted paraphrase under the same budget B.
+    # Every verbatim turn becomes a second-tier entry (Episode.raw) charged to the same budget B: extracted
+    # entries are selected exactly as without raw turns; raw turns take whatever budget is left, ranked by
+    # specificity x speaker / tokens, are evicted first when entries need room and never displace one.
     # The read path shows surviving raw turns to the reader under budget.raw_tokens.
     raw_turns: bool = False
     validity_chain: bool = True        # False = overwrite (the no_validity_chain ablation)
@@ -251,11 +252,31 @@ class SystemConfig(BaseModel):
     def load(cls, path: str | Path | None, overrides: dict[str, Any] | None = None) -> SystemConfig:
         cfg = cls()
         if path is not None:
-            with open(path) as f:
-                cfg = cls.model_validate(yaml.safe_load(f) or {})
+            cfg = cls.model_validate(_load_yaml_tree(Path(path)))
         if overrides:
             cfg = cfg.with_overrides(overrides)
         return cfg
+
+
+def _deep_merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def _load_yaml_tree(path: Path, seen: tuple[Path, ...] = ()) -> dict:
+    """A config file may name a parent with `extends: other.yaml` (relative to its own directory); the
+    child's keys override the parent's, section by section. Without it a partial file silently falls
+    back to the code defaults for every field it does not mention."""
+    if path in seen:
+        raise ValueError(f"config extends cycle: {' -> '.join(str(p) for p in seen + (path,))}")
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+    parent = data.pop("extends", None)
+    if parent is None:
+        return data
+    return _deep_merge(_load_yaml_tree((path.parent / parent).resolve(), seen + (path,)), data)
 
 
 def parse_override(text: str) -> tuple[str, Any]:

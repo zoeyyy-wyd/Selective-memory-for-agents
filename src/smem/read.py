@@ -134,7 +134,7 @@ class Reader:
                     if (s_, j) in by_loc:
                         score[(s_, j)] = score.get((s_, j), 0.0) + rel * w
         if self.r.k_turns > 0:
-            for id_, rel in self._retrieve(queries, qvec, raw_allowed, k=self.r.k_turns).items():
+            for id_, rel in self._retrieve(queries, qvec, raw_allowed, k=self.r.k_turns, raw=True).items():
                 e = self.store.get(id_)
                 if isinstance(e, Episode):
                     k = (e.session_id, e.turn_idx)
@@ -175,12 +175,13 @@ class Reader:
         return queries
 
     # ---- retrieval -----------------------------------------------------------------------------
-    def _retrieve(self, queries: list[str], qvec: np.ndarray, allowed: set[str], k: int | None = None) -> dict[str, float]:
+    def _retrieve(self, queries: list[str], qvec: np.ndarray, allowed: set[str], k: int | None = None,
+                  raw: bool = False) -> dict[str, float]:
         rrf: dict[str, float] = Counter()
         k_bm25, k_dense = (k, k) if k else (self.r.k_bm25, self.r.k_dense)
         k = self.r.rrf_k
         for q in queries:
-            for rank, (id_, _) in enumerate(self.store.search_bm25(q, k_bm25, allowed)):
+            for rank, (id_, _) in enumerate(self.store.search_bm25(q, k_bm25, allowed, raw=raw)):
                 rrf[id_] += 1.0 / (k + rank + 1)
             vec = qvec if q is queries[0] else self.embedder.encode([q])[0]
             for rank, (id_, _) in enumerate(self.store.search_dense(vec, k_dense, allowed)):

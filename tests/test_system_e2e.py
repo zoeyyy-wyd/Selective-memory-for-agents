@@ -110,9 +110,11 @@ def test_raw_turns_are_budgeted_candidates(worked_example, tmp_path):
     assert off.ask("Where did I live in March?", now).read.excerpts == []
     on = build(sessions=worked_example, cfg_overrides={"write.raw_turns": True, "budget.raw_tokens": 120, "read.k_turns": 5})
     raw = on.store.raw_ids()
-    assert len(raw) == sum(1 for s in worked_example for t in s.turns if t.content.strip())
-    assert raw <= on.writer.active_ids()          # unbounded budget: every turn is kept
-    assert on.stats()["store_tokens"] == off.stats()["store_tokens"] + sum(on.store.get(i).tokens for i in raw & on.writer.active_ids())
+    n_turns = sum(1 for s in worked_example for t in s.turns if t.content.strip())
+    assert sum(1 for i in on.candidate_origin if i.startswith("raw_")) == n_turns   # every turn was a candidate
+    assert len(raw) == n_turns and raw <= on.writer.active_ids()               # unbounded: every turn is kept
+    assert on.writer.active_ids() - raw == off.writer.active_ids()               # entries selected exactly as before
+    assert on.stats()["store_tokens"] == off.stats()["store_tokens"] + sum(on.store.get(i).tokens for i in raw)
     r = on.ask("Where did I live in March?", now).read
     assert r.excerpts and r.raw_tokens <= 120 and r.raw_tokens == sum(t.tokens for t in r.excerpts)
     assert any("Boston" in t.text for t in r.excerpts)
@@ -136,5 +138,7 @@ def test_raw_turns_compete_for_the_budget(worked_example):
     mem = build(sessions=worked_example, cfg_overrides={"write.raw_turns": True, "budget.raw_tokens": 120,
                                                         "budget.store_tokens": 60, "write.policy": "all"})
     assert mem.stats()["store_tokens"] <= 60
+    plain = build(sessions=worked_example, cfg_overrides={"budget.store_tokens": 60, "write.policy": "all"})
+    assert mem.writer.active_ids() - mem.store.raw_ids() == plain.writer.active_ids()   # raw never displaces an entry
     res = mem.ask("Where did I live in March?", now)
     assert res.read.tokens <= 200

@@ -44,3 +44,13 @@ def test_infra_knobs_do_not_change_the_run_identity():
     diff = base.with_overrides({"evict.policy": "fifo"})
     assert diff.config_hash() != base.config_hash()
     assert SystemConfig.is_infra_key("models.embed_device") and not SystemConfig.is_infra_key("evict.policy")
+
+
+def test_config_extends_inherits_parent(tmp_path):
+    parent = tmp_path / "base.yaml"; child = tmp_path / "child.yaml"
+    parent.write_text("write:\n  sieve_min_threshold: 0.0003\nmodels:\n  judge_model: gpt-4o\n  embedder: BAAI/bge-m3\n")
+    child.write_text("extends: base.yaml\nwrite:\n  raw_turns: true\n")
+    cfg = SystemConfig.load(child)
+    assert cfg.write.raw_turns and cfg.write.sieve_min_threshold == 0.0003
+    assert cfg.models.judge_model == "gpt-4o" and cfg.models.embedder == "BAAI/bge-m3"
+    assert "extends" not in cfg.identity()

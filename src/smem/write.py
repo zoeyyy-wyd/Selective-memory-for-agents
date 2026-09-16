@@ -29,6 +29,8 @@ class Sieve:
     cov: CoverageState
     selected: set[str] = field(default_factory=set)
     used: int = 0
+    raw: dict[str, float] = field(default_factory=dict)   # second-tier raw turns in `selected`: id -> value density
+    raw_used: int = 0
 
     def value(self) -> float:
         return self.cov.value()
@@ -118,7 +120,8 @@ class WritePolicy:
         # one mention event per (key, session), whatever the number of candidates that carry it
         mentioned: set[str] = set()
         for e in result.episodes + result.facts:
-            mentioned.update(hawkes_keys(e))
+            if not getattr(e, "raw", False):   # raw turns are payload, not mentions
+                mentioned.update(hawkes_keys(e))
         self.hawkes.observe_many(sorted(mentioned), now)
         self.refresh_weights(now)
         intensities = self._intensities(now)
@@ -157,7 +160,7 @@ class WritePolicy:
         return admitted
 
     def _is_duplicate_episode(self, vec: np.ndarray) -> bool:
-        pool_eps = set(self.store.episodes)
+        pool_eps = {i for i, ep in self.store.episodes.items() if not ep.raw}
         if not pool_eps:
             return False
         _, sim = self.store.vectors.max_sim(vec, pool_eps)
@@ -191,6 +194,8 @@ class WritePolicy:
     # ---- streaming selection -------------------------------------------------------------------
     def _select(self, e: Entry, vec: np.ndarray, intensities: dict[str, float], now: datetime,
                 protect: set[str] = frozenset()) -> bool:
+        if getattr(e, "raw", False):
+            return self._select_raw(e, vec)
         self.stats.candidates += 1
         self.candidates[e.id] = e
         w = self._weight(e, intensities, now)
@@ -199,7 +204,10 @@ class WritePolicy:
         singleton = self.sieves[0].cov.singleton(vec) / max(e.tokens, 1)
         # scale estimate only: a very short entry must not set the bar for everyone
         singleton_scale = self.sieves[0].cov.singleton(vec) / max(e.tokens, 1)
-        self.max_ratio = max(self.max_ratio, singleton_scale)
+        if not getattr(e, "raw", False):
+            # the normaliser is defined over extracted entries; a long verbatim turn is similar to hundreds
+            # of targets at once and would raise the bar for every later entry
+            self.max_ratio = max(self.max_ratio, singleton_scale)
         admitted_anywhere = False
         for s in self.sieves:
             if self._consider(s, e, vec, now, protect):
@@ -208,12 +216,82 @@ class WritePolicy:
             self.written_ids.add(e.id)
         return admitted_anywhere
 
+    # ---- raw turns: second tier ----------------------------------------------------------------
+    @staticmethod
+    def raw_value(e: Entry) -> float:
+        """Value density of a verbatim turn: specific, user-spoken text first; length-neutral above 20
+        tokens so a six-token "Explain X" turn is not the cheapest thing in the stream."""
+        return specificity(e.text) * source_weight(e.speaker) / max(e.tokens, 20)
+
+    def _select_raw(self, e: Entry, vec: np.ndarray) -> bool:
+        value = self.raw_value(e)
+        admitted = False
+        for s in self.sieves:
+            if self._consider_raw(s, e, vec, value):
+                admitted = True
+        if admitted:
+            self.written_ids.add(e.id)
+        return admitted
+
+    def _consider_raw(self, s: Sieve, e: Entry, vec: np.ndarray, value: float) -> bool:
+        cost = max(e.tokens, 1)
+        if cost > self.budget:
+            return False
+        if s.used + cost > self.budget:
+            # only cheaper raw turns are displaced, never an extracted entry
+            freed, victims = 0, []
+            for vid, v in sorted(s.raw.items(), key=lambda kv: kv[1]):
+                if v >= value or s.used - freed + cost <= self.budget:
+                    break
+                victims.append(vid)
+                freed += max(self.store.get(vid).tokens, 1) if self.store.get(vid) else 0
+            if s.used - freed + cost > self.budget:
+                self.stats.skipped_full += 1
+                return False
+            for vid in victims:
+                self._remove_raw(s, vid, reason="raw_swap")
+            self.stats.swapped_in += 1
+        self._add_raw(s, e, vec, value, cost)
+        return True
+
+    def _add_raw(self, s: Sieve, e: Entry, vec: np.ndarray, value: float, cost: int) -> None:
+        if e.id not in self.store:
+            self.store.add(e)
+        if e.id in s.selected:
+            return
+        self.refs[e.id] += 1
+        s.selected.add(e.id)
+        s.raw[e.id] = value
+        s.used += cost
+        s.raw_used += cost
+        self.stats.admitted += 1
+
+    def _remove_raw(self, s: Sieve, id_: str, reason: str) -> None:
+        if id_ not in s.raw:
+            return
+        entry = self.store.get(id_)
+        cost = max(entry.tokens, 1) if entry is not None else 0
+        s.selected.discard(id_)
+        del s.raw[id_]
+        s.used -= cost
+        s.raw_used -= cost
+        self.refs[id_] -= 1
+        self.stats.evicted += 1
+        self.evicted_log.append((id_, reason))
+        if self.refs[id_] <= 0:
+            del self.refs[id_]
+            self.store.remove(id_)
+
+    def _make_room_from_raw(self, s: Sieve, cost: int) -> None:
+        """Entries outrank raw turns: free the lowest-value raw turns before any entry is considered."""
+        for vid, _ in sorted(s.raw.items(), key=lambda kv: kv[1]):
+            if s.used + cost <= self.budget:
+                return
+            self._remove_raw(s, vid, reason="raw_evicted_for_entry")
+
     def _consider(self, s: Sieve, e: Entry, vec: np.ndarray, now: datetime, protect: set[str]) -> bool:
         cost = max(e.tokens, 1)
-        # A verbatim turn is the source record, not a claim: it is not filtered by the density threshold
-        # (its marginal gain over its own paraphrases is always small per token) but it pays its full cost
-        # and is swapped or evicted like any entry once the budget binds.
-        policy = "fill" if getattr(e, "raw", False) else self.cfg.write.policy
+        policy = self.cfg.write.policy
         if policy == "novelty_threshold":
             _, sim = self.store.vectors.max_sim(vec, s.selected) if s.selected else (None, 0.0)
             if 1.0 - sim < self.cfg.write.novelty_threshold:
@@ -225,6 +303,8 @@ class WritePolicy:
                 self.stats.skipped_threshold += 1
                 return False
 
+        if s.used + cost > self.budget and s.raw:
+            self._make_room_from_raw(s, cost)
         if s.used + cost <= self.budget:
             self._add_to(s, e, vec)
             return True
@@ -268,6 +348,9 @@ class WritePolicy:
         self.stats.admitted += 1
 
     def _remove_from(self, s: Sieve, id_: str, reason: str) -> None:
+        if id_ in s.raw:
+            self._remove_raw(s, id_, reason)
+            return
         if id_ not in s.selected:
             return
         entry = self.store.get(id_)
