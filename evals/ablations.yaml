@@ -1,4 +1,8 @@
-# One group per design decision (plan section 10). `smem-eval --ablation-group evict` runs every row
+# Current results live in docs/results.md. The notes below are the record of the calibration and of the
+# facts-only era (before raw turns, 2026-09-13/14); accuracies quoted as 0.5x there are on the 94
+# answerable dev questions, the 100-question count for the same run is 59.
+#
+# One group per design decision. `smem-eval --ablation-group evict` runs every row
 # of a group with the same base config; each row is a set of dotted overrides.
 base: configs/default.yaml
 groups:

@@ -84,9 +84,12 @@ runner 外面切:100 道题的 id 轮流分 3 份,三个 `smem-eval` 进程各�
 smem-extract --split dev --config configs/default.yaml --workers 16 --ablate extract.prompt_version=<v>
 # 2. 预热向量缓存(GPU,几分钟)
 python scripts/prewarm_embeddings.py --split dev --prompt-version <v>
-# 3. 分片评测(每片一个 --out 目录),ingest 缓存自动建立
-smem-eval ... --ids "$(cat shard0.ids)" --out evals/results_<v>/shard0 --ablate extract.prompt_version=<v> --ablate consolidation.policy=no_consolidation
+python scripts/prewarm_embeddings.py --split dev --turns --device cuda --batch 8   # 原文轮(write.raw_turns)
+# 3. 分片评测(每片一个 --out 目录,三片为宜,六片会撞 OpenAI 每分钟 20 万 token 的限额),ingest 缓存自动建立
+smem-eval --split dev --config configs/raw_turns.yaml --backend llm --judge llm --ids "$(cat shard0.ids)" --out evals/results_<v>/shard0
 ```
+
+后来加的:配置文件支持 `extends: default.yaml`(之前这个键被静默忽略,部分字段回落到代码默认值);429 单独给 20 轮退避;GPU 上算向量时输入封顶 2048 token、批次 8,和 vLLM 共享显存不再溢出;`--ids` 也能限定预热脚本的范围(test200 用)。
 
 ## 运维上的几条
 
@@ -99,6 +102,6 @@ smem-eval ... --ids "$(cat shard0.ids)" --out evals/results_<v>/shard0 --ablate 
 ## 还没做的
 
 - 合并模块的替换语义(见上),之后重新打开合并要再评估一次。
-- ingest 缓存压缩(float16 / 压缩 npz),40 MB/题可以降到 1/4。
+- ingest 缓存压缩(float16 / 压缩 npz),40 MB/题可以降到 1/4;开原文后每题更大。
 - runner 原生 `--shard k/n`,替代命令行上的一长串 id。
-- run 身份按解析后的配置计算。
+- run 身份按解析后的配置计算(现在多一个等价的 override 也会变身份)。

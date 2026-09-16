@@ -1,6 +1,6 @@
 # 全部流程
 
-从环境到最终数字,按发生顺序。每一步写清做了什么、为什么、怎么验证。
+从环境到最终数字,按发生顺序。每一步写清做了什么、为什么、怎么验证。数字全部在 `docs/results.md`;读侧和原文那部分的逐步实验在 `docs/accuracy-plan.md`;外部系统的做法在 `docs/memory-systems-survey.md`;提速在 `docs/speed-optimization.md`。仓库根目录的 `selective-memory-for-long-conversation-agents.md` 是 09-10 的原始方案,和这里不一致的地方以这里为准。
 
 ## 1. 系统是什么
 

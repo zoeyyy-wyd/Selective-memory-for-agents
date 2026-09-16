@@ -1,7 +1,7 @@
-# Reference configuration plus verbatim source turns for the reader (docs/accuracy-plan.md, section 8).
-# dev100: 59 (facts only) -> 71 (raw turns behind packed entries, 4k) -> 77 (raw turns also indexed, 6k).
-# Raw turns are candidate entries: each costs its own tokens against budget.store_tokens and is admitted,
-# swapped or evicted by the write policy like any extracted entry.
+# Final configuration: default.yaml plus verbatim turns (docs/results.md, docs/accuracy-plan.md).
+# dev100 59 (facts only) -> 71 (raw turns behind packed entries, 4k) -> 76-77 (raw turns also indexed, 6k);
+# test200 0.82. Raw turns are second-tier entries charged to budget.store_tokens: extracted entries are
+# selected exactly as without them, raw turns take the budget that is left and are evicted first.
 extends: default.yaml
 write:
   raw_turns: true

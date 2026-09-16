@@ -7,9 +7,23 @@ Write, forget and read are one budgeted submodular coverage problem, with a Hawk
 and entailment-verified consolidation. Nothing is trained. The deliverable on LongMemEval is the
 accuracy-vs-budget curve plus three metrics that measure writing, forgetting and reading directly.
 
-The technical plan is in [selective-memory-for-long-conversation-agents.md](selective-memory-for-long-conversation-agents.md).
-This repository implements it end to end; the numbers below are placeholders until the GPU/API runs
-in section "Running the real experiments" have been done.
+The original technical plan is [selective-memory-for-long-conversation-agents.md](selective-memory-for-long-conversation-agents.md).
+This repository implements it end to end and has been run on LongMemEval-S (September 2026). Where the
+implementation departs from the plan, the plan is superseded by what is written here and in `docs/`.
+
+**Headline numbers** (gpt-4.1-mini reader, GPT-4o judge, `configs/raw_turns.yaml`): unbounded store
+**0.80 on 297 questions** (dev100 0.76, held-out test200 0.82); accuracy-vs-budget at B = 1.5% / 3% /
+12.5% / 25% of the history: 0.26 / 0.38 / 0.60 / 0.76 with swap eviction, vs 0.22 / 0.27 / 0.60 / – with FIFO.
+
+Documentation (Chinese):
+
+| file | what it is |
+|---|---|
+| [docs/results.md](docs/results.md) | every result: final config on dev / test / combined, budget curves, every variant tried and why it was or was not adopted |
+| [docs/process.md](docs/process.md) | the workflow: what the system does step by step, the timeline of the work, how each change was verified, how to reproduce |
+| [docs/accuracy-plan.md](docs/accuracy-plan.md) | the accuracy work in detail: ceiling, failure attribution, the read-side experiments, raw turns as budgeted entries, held-out check |
+| [docs/memory-systems-survey.md](docs/memory-systems-survey.md) | what the 80%+ LongMemEval systems do, and what of it applies here |
+| [docs/speed-optimization.md](docs/speed-optimization.md) | how a 100-question evaluation went from hours to minutes |
 
 ## Setup
 
@@ -68,7 +82,10 @@ evals/
   extract_cache.py  smem-extract: parallel one-time extraction of every unique session
   ablations.yaml  one group per design decision + the two budget sweeps
 baselines/        oracle, full_context, naive_rag, mem0_oss (§02)
-configs/          default.yaml (real models), offline.yaml (no models)
+configs/          default.yaml (real models); raw_turns.yaml (final: default + verbatim turns, `extends:`);
+                  offline.yaml (no models); claude.yaml, tokenrouter.yaml (other answering backends)
+scripts/          prewarm_embeddings.py (batch-embed entries / raw turns on the GPU before an evaluation)
+docs/             results, process, experiment logs (see the table above)
 demo/cli.py       smem-demo
 tests/            validity chains, coverage vs brute force, KMN packing, eviction order, sieve budgets,
                   temporal parsing, extraction schema errors, consolidation triggers, end-to-end, harness
@@ -102,6 +119,15 @@ per token (consolidated episodes first; a chain is one unit) and admits the cand
 per token beats the victim's by `(1 + γ)`; `fifo`/`lru`/`random`/`utility_heuristic` make room
 unconditionally.
 
+**Raw turns (`write.raw_turns`, the final configuration).** Every verbatim conversation turn is also
+stored, as a second-tier entry charged to the same budget *B*: extracted entries are selected exactly as
+without raw turns (raw turns are not coverage targets, do not touch the sieve normaliser and do not
+count as Hawkes mentions), raw turns fill whatever budget is left, ranked by `spec · src / max(tokens, 20)`,
+are evicted first when an entry needs room and never displace one. With *B* unbounded every turn is
+kept; at *B* ≤ 6% of the history none survives and the system reduces to the extracted-entries one.
+This is what lifted dev100 from 59 to 76-77: the reader sees the source text, the extracted facts act as
+its index and carry the time semantics.
+
 **Weights.** `w_h = spec(h) · src(h) · λ_e(t)` with `λ_e` the Hawkes intensity of the entry's hottest
 key: facts belong to their `entity/attribute` process (e.g. `user/city`), episodes to their named
 entities; mentions and retrieval hits are the events. `swap_no_hawkes` sets `λ = 1`.
@@ -110,7 +136,11 @@ entities; mentions and retrieval hits are the events. `swap_no_hawkes` sets `λ 
 is replaced by the chain node(s) its interval intersects ("now" = tail, subject to the volatility rule;
 change questions = whole chain) → optional entity two-hop with an adaptive budget share → packing under
 *R* with KMN budgeted greedy + CELF (MMR and top-k are the controls) → abstain when the top relevance is
-below `τ_abs` *and* no question term appears in the packed content.
+below `τ_abs` *and* no question term appears in the packed content. With raw turns on, the packed entries
+are followed by up to `budget.raw_tokens` (6k) of surviving verbatim turns: the turns the packed entries were
+extracted from (neighbours at half weight) plus, with `read.k_turns`, turns retrieved directly (dense over the
+turn text, BM25 over turn text + the facts extracted from it). The two are shown to the reader as separate
+sections; entry ids and raw-turn ids are both citable.
 
 **Consolidation (`consolidate.py`).** After each session, unconsolidated episodes from the last *K*
 sessions are threshold-clustered; a cluster fires when its members' mean normalised coverage loss is
@@ -173,46 +203,64 @@ behaviours the backend absorbs so the rest of the pipeline does not have to know
 output is `output_config.format`, and thinking is **off by default** — it is on by default on Sonnet 5
 and Opus 5, and its tokens come out of `max_tokens`, which would leave the judge's `max_tokens=10`
 call with no text at all. Thinking off is also the right experimental choice: a reader that reasons
-around a retrieval gap masks exactly the differences Figure 1 exists to show.
+around a retrieval gap masks exactly the retrieval differences the budget curve is meant to expose.
 
 ### Running the real experiments
 
-1. Serve the extraction model on the GPU box (24 GB is enough; sessions are ≤ 8.8k tokens):
-   `vllm serve Qwen/Qwen3-8B-AWQ --port 8000 --max-model-len 12288 --gpu-memory-utilization 0.9`
-   and point `models.extract_base_url` at it (an SSH tunnel is fine). `configs/default.yaml` already
-   switches Qwen3 thinking off and sends the schema as an OpenAI-style `response_format`.
-2. Prefill the extraction cache in parallel: `smem-extract --split dev --workers 32`. The runner
-   extracts serially per question, so do this first; it also prints the write error rate.
-3. `export OPENAI_API_KEY=...`; the answering and judge models are set in `configs/default.yaml`.
-4. Build order as in plan §13: oracle / full-context / naive-RAG baselines on dev, then the system with
-   *B* unbounded, then the `evict` sweep at *B* ∈ {0.125, 0.06, 0.03, 0.015} (Figure 1), the `packing` sweep at
-   *R* ∈ {1k, 2k, 4k, 8k} (Figure 2), and `validity_chain` by question type (Figure 3). Test split only at
-   the end, with `--judge llm` and `models.judge_model: gpt-4o`.
-5. Fit the Hawkes parameters on dev with `HawkesIntensity.fit()` over the dev histories and put the
-   result in the config; set `read.tau_abs` from the dev abstention calibration.
+1. Serve the extraction model on the GPU box:
+   `vllm serve Qwen/Qwen3-8B-AWQ --port 8000 --max-model-len 16384 --gpu-memory-utilization 0.75`
+   (0.75 leaves room for bge-m3 next to it; `configs/default.yaml` switches Qwen3 thinking off and sends
+   the schema as `response_format`).
+2. Prefill the extraction cache, 16 workers (32 saturates the KV cache and is slower):
+   `smem-extract --split dev --workers 16 --ablate extract.prompt_version=v3-detail`. About 4 s per
+   session: dev's 4564 unique sessions take ~6.7 h, the 197-question test subset's 8510 sessions ~9.5 h.
+   The cache is keyed by prompt version, so versions coexist.
+3. Prewarm the embedding cache on the GPU, otherwise the evaluation computes them on the CPU:
+   `python scripts/prewarm_embeddings.py --split dev --prompt-version v3-detail` and, for raw turns,
+   `python scripts/prewarm_embeddings.py --split dev --turns --device cuda --batch 8`.
+4. `export OPENAI_API_KEY=...` (or `.env`). Evaluate in three shards (six shards hit the 200k tokens/min
+   limit), each with its own `--out`:
+   `smem-eval --split dev --config configs/raw_turns.yaml --backend llm --judge llm --ids "<ids>" --out evals/results_x/shard0`.
+   Add `--store-budget 0.03` and `--ablate evict.policy=fifo` for the budget curve. Ingest state is cached
+   per (question, write-side config) under `.cache/ingest`, so read-side changes re-run in minutes.
+5. The held-out subset is `data/test200_seed0.json`; the runner takes its ids through `--ids`.
+
+Config files may inherit with `extends: other.yaml` (keys override section by section). Run identity
+excludes infrastructure fields (timeouts, devices, cache dirs); it includes everything that can change a
+result.
 
 ## Results
 
-| configuration | accuracy @ B=100% | @ 50% | @ 25% | @ 12.5% | tokens / query |
-|---|---|---|---|---|---|
-| this system (sieve + swap + Hawkes) | — | — | — | — | — |
-| LRU / FIFO / random / utility heuristic | — | — | — | — | — |
-| naive RAG (no eviction) | — | — | — | — | — |
-| Oracle | — | — | — | — | — |
+Full tables and every variant tried: [docs/results.md](docs/results.md). Final configuration
+`configs/raw_turns.yaml`: Qwen3-8B-AWQ extraction (v3-detail) → bge-m3 + BM25 → 2k tokens of packed
+entries + 6k tokens of verbatim turns → gpt-4.1-mini; GPT-4o judge with the official prompt.
 
-To be filled from `evals/results/*/summary.json` after the runs above. Offline dry runs produce the
-evidence metrics but not meaningful accuracy (hash embeddings, extractive answering).
+| | dev100 | test200 (held-out, 197 q) | combined 297 |
+|---|---|---|---|
+| store unbounded | 0.76 | **0.82** | **0.80** |
+| oracle (gold evidence text → same reader) | 0.84 | | |
+
+Accuracy vs store budget *B* (fraction of the history's tokens), combined 297 questions:
+
+| B | 0.015 | 0.03 | 0.125 | 0.25 | ∞ |
+|---|---|---|---|---|---|
+| sieve + swap + Hawkes | **0.26** | **0.38** | **0.60** | **0.76** | **0.80** |
+| FIFO | 0.22 | 0.27 | 0.60 | | |
+| LRU (dev100 only) | 0.23 | | | | |
+
+Below B = 0.06 the budget is spent entirely on extracted entries and no raw turn survives; from 0.125 every
+entry fits and the remainder goes to raw turns, which is why swap and FIFO coincide there.
 
 ## Status and known gaps
 
-- Implemented and tested offline: every module, every ablation switch, all four baselines' plumbing,
-  the metrics with CIs, the runner, the demo.
-- Not yet run: anything needing the GPU or an API key (extraction with Qwen3-8B, bge-m3 embeddings,
-  the DeBERTa NLI check, gpt-4.1-mini answering, the LLM judge, Mem0). Those code paths exist but have
-  only been exercised through their offline stand-ins and scripted-LLM tests.
-- The judge prompts are a port of upstream `evaluate_qa.py`; diff against the LongMemEval repository
-  before the final test run.
-- Key drift has only been exercised with the heuristic extractor, whose keys come from a fixed table.
-  The first thing to inspect after the real dev extraction is `key_drift` in `summary.json` / `records.jsonl`.
-- `HashEmbedder` similarity is lexical, so offline relevance/abstention behaviour is only indicative;
-  `read.tau_abs` and the Hawkes parameters are meant to be tuned on dev with the real models.
+- Everything above has been run with the real models; 107 tests cover the modules, the cache round trips,
+  raw turns as budgeted entries and config inheritance.
+- Consolidation is off: with the entailment direction fixed the summaries are accepted, but the write
+  policy sees them as new candidates with ~0 gain over their still-stored members. It needs
+  "replace the members" semantics before it can do anything.
+- Small budgets are low because the coverage objective keeps what represents the stream, and the
+  benchmark asks for needles; half of the evidence is gone at write time at B = 0.015. The write value
+  function has not been worked on (see docs/process.md, "还没做的").
+- multi-session counting and single-session-preference are the weak types on both splits.
+- Extraction cache covers dev and the 197-question test subset only; the remaining 203 test questions
+  would need ~7k more sessions extracted.
